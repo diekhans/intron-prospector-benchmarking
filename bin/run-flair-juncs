@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Run flair's junctions_from_sam on one benchmark dataset.
+
+The entropy threshold is 1.0, which is the default of both junctions_from_sam
+-c and intron-prospector --min-confidence-score and is the same statistic, so
+the two tools apply the same confidence criterion.  Unlike the
+intron-prospector run, this filtering cannot be deferred to sj-compare:
+junctions_from_sam writes only the junctions that pass.
+
+junctions_from_sam names its own output <name>_junctions.bed, so it is run on a
+prefix beside the requested file and the result renamed into place.
+"""
+import argparse
+import os
+import os.path as osp
+import shutil
+import sys
+import pipettor
+from pycbio.sys import cli, fileOps
+import benchconf
+
+# junctions_from_sam -c, matching intron-prospector --min-confidence-score
+CONFIDENCE_SCORE = 1.0
+
+# installed in the flair-mddev conda environment; its shebang names that
+# environment's python, so an absolute path runs without activating it
+JUNCTIONS_FROM_SAM = "junctions_from_sam"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--junctions-from-sam", default=JUNCTIONS_FROM_SAM,
+                        help="flair junctions_from_sam program, found on PATH by "
+                        "default; give the path in the flair-mddev conda environment "
+                        "to run it without activating that environment")
+    parser.add_argument("dataset", help="dataset name in conf/datasets.tsv")
+    parser.add_argument("out_bed", help="junction BED to create")
+    opts, args = cli.parseOptsArgsWithLogging(parser)
+    benchconf.check_dataset_name(parser, args.dataset)
+    return opts, args
+
+
+def find_program(program):
+    path = shutil.which(program)
+    if path is None:
+        raise cli.PycbioException(
+            f"junctions_from_sam program not found: {program}; pass "
+            "--junctions-from-sam with its path in the flair-mddev conda environment")
+    return path
+
+
+def junctions_cmd(opts, dataset, prefix):
+    return [find_program(opts.junctions_from_sam),
+            f"--sam={dataset.bam_path}",
+            f"--confidence_score={CONFIDENCE_SCORE}",
+            f"--name={prefix}"]
+
+
+def run_junctions(opts, dataset, prefix):
+    cmd = junctions_cmd(opts, dataset, prefix)
+    print("running:", " ".join(cmd), file=sys.stderr, flush=True)
+    pipettor.run(cmd, stderr=2)
+    written = prefix + "_junctions.bed"
+    if not osp.exists(written):
+        raise cli.PycbioException(
+            f"junctions_from_sam did not write {written}; it names its output from "
+            "--name, so check that this version still appends _junctions.bed")
+    os.rename(written, prefix)
+
+
+def run_flair_juncs(opts, args):
+    dataset = benchconf.load_datasets()[args.dataset]
+    benchconf.check_inputs(dataset, [dataset.bam_path])
+    fileOps.ensureFileDir(args.out_bed)
+    with fileOps.AtomicFileCreate(args.out_bed) as tmp_bed:
+        run_junctions(opts, dataset, tmp_bed)
+
+
+def main():
+    opts, args = parse_args()
+    with cli.ErrorHandler(noStackExcepts=(OSError, cli.PycbioException)):
+        run_flair_juncs(opts, args)
+
+
+main()

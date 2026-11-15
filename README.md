@@ -4,8 +4,11 @@ Tools for benchmarking intron-prospector
 
 This is mostly for intron-prospector developers and not geared for general use
 
-Compares the junctions `intron-prospector` calls from a STAR BAM against the
-`SJ.out.tab` STAR wrote from the same alignment run.
+Compares three sets of junctions over one STAR BAM:
+
+- what `intron-prospector` calls from the BAM
+- what STAR itself wrote in `SJ.out.tab` during the alignment run
+- what flair's `junctions_from_sam` calls from the same BAM
 
 ## Running
 
@@ -13,7 +16,10 @@ Compares the junctions `intron-prospector` calls from a STAR BAM against the
 make -j                                     # one job per dataset
 ```
 
-Each dataset is one pass over a 14-22 GB BAM.
+Each dataset is two passes over a 14-22 GB BAM, one per tool.
+`junctions_from_sam` reads the BAM with pysam and converts each record back to a
+SAM line, around 28,000 alignments a second, so WTC11's 256 million alignments
+take about two and a half hours.
 
 The binary under test is `${prospectorDir}/bin/intron-prospector`, where
 `prospectorDir` defaults to `../intronProspector`, the intron-prospector source
@@ -66,6 +72,24 @@ holds everything in the BAM:
 
 `bin/sj-compare` filters afterwards, which avoids a second pass over the BAM.
 
+## How junctions_from_sam is run
+
+`bin/run-flair-juncs` runs it with `-c 1.0`, the default of both
+`junctions_from_sam -c` and `intron-prospector --min-confidence-score`.  Both
+are the same statistic, the Shannon entropy of the distinct alignment offsets
+supporting a junction, from JuncBASE.  This filtering cannot be deferred the way
+intron-prospector's is: `junctions_from_sam` writes only the junctions that pass,
+so the flair side of a comparison is never unfiltered.
+
+It is installed in the `flair-mddev` conda environment.  Its shebang names that
+environment's python, so the Makefile runs it by absolute path without
+activating it, from the `markd` environment the rest of the benchmark runs in.
+`make flairJuncs=/some/where/junctions_from_sam` for another install.
+
+Its output is a headerless BED6 per junction: the interval is the intron,
+`score` is the number of supporting alignments capped at 1000, and `strand`
+comes from the `XS:A:` tag, or is `.` when the BAM has none.
+
 ## Comparison
 
 `bin/sj-compare` keys junctions on (chrom, intron start, intron end), converting
@@ -86,6 +110,15 @@ disagreement than to a difference in what each tool reports.  `bin/sj-compare
   `--outSJfilterOverhangMin` for canonical junctions; the unique-read threshold
   drops junctions seen only on multi-mapping alignments, which intron-prospector
   does not report because it skips secondary alignments.
+- `filt_flair` keeps junctions with a confidence of at least 1.0, which is what
+  `junctions_from_sam` applied when it wrote its BED.  This is the filter under
+  which the intron-prospector and flair sets are comparable.
+
+The flair side is not filtered by `bin/sj-compare`: `junctions_from_sam` reports
+neither an anchor nor a unique read count, and its entropy filter was applied
+when it ran.  `--flair-confidence` states the `-c` it was run with, 1.0 by
+default, and a filter that asks for more than that is an error rather than a
+comparison with the flair side the less filtered one.
 
 Adding a filter means one entry in `FILTERS` and its name in the Makefile's
 `filters`.
@@ -112,10 +145,27 @@ concatenated, whose counts are over different reads than the BAM holds.
 Outputs in `output/`:
 
 - `<ds>.calls.tsv` intron-prospector `--intron-calls` output
-- `<ds>.<filter>.compare.tsv.gz` one row per junction in the union of the two
-  sets, `found` is `both`, `star` or `prospector`
-- `<ds>.<filter>.summary.tsv` `section`, `metric`, `star`, `prospector`, `value`
-  rows; the `params` section records which filter produced the file
+- `<ds>.flair.bed` `junctions_from_sam` output
+- `<ds>.<filter>.compare.tsv.gz` one row per junction in the union of the sets;
+  `found` names the sides that have it, joined by `+`, such as `star`,
+  `star+prospector` or `star+prospector+flair`
+- `<ds>.<filter>.summary.tsv` `section`, `metric`, `star`, `prospector`,
+  `flair`, `value` rows; the `params` section records which filter produced the
+  file
+
+Summary sections:
+
+- `totals` junctions per side, `shared` by every side, and `only` for the
+  junctions one side has and no other does
+- `overlaps` the three pairwise intersections, from which, say, the junctions
+  flair has and intron-prospector does not can be read off
+- `only_by_*` breakdowns of each side's exclusive junctions; flair has a read
+  count only
+- `shared_*` STAR against intron-prospector over the junctions those two share,
+  whatever else is in the comparison
+- `shared_pros_flair_count` read counts over the junctions intron-prospector and
+  flair share, which the cap at 1000 and the different alignment sets make a
+  rough comparison
 
 In the summary, `star` and `prospector` hold the same metric measured on each
 side and `value` holds metrics that are not per-tool, such as the number of
@@ -132,7 +182,7 @@ equivalent intron-prospector reports to `SJ.out.tab` column 9.
   are absent from the calls.  STAR copies the Illumina chastity filter into SAM
   flag 0x200 and counts those alignments; intron-prospector skips them.
 
-## Reasons the two legitimately differ
+## Reasons the tools legitimately differ
 
 - STAR applies `--outSJfilterOverhangMin` (default 30 12 12 12, by motif),
   `--outSJfilterCountUniqueMin` / `CountTotalMin` (3 1 1 1),
@@ -154,3 +204,13 @@ equivalent intron-prospector reports to `SJ.out.tab` column 9.
 - `uniq`/`multi` are not the same partition: intron-prospector also has
   `unsure_mapped_count` for alignments with no NH tag or a discordant or
   partially mapped pair.
+- `junctions_from_sam` skips any alignment whose CIGAR holds an insertion,
+  deletion, soft clip or hard clip, printing one message per kind.  On an
+  Illumina STAR BAM that drops a large share of the alignments, and with them
+  junctions supported only by clipped or indel-carrying reads.
+- `junctions_from_sam` does not test the SAM flags, so it counts secondary,
+  supplementary and QC fail alignments that intron-prospector skips.  It
+  therefore reports junctions that intron-prospector does not, the same
+  junctions `SJ.out.tab` has and the calls do not.
+- `junctions_from_sam` caps its score at 1000 supporting alignments, so a count
+  of 1000 is a floor, not a count.

@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Compare intron-prospector intron calls with a STAR SJ.out.tab.
+"""Compare intron-prospector intron calls with a STAR SJ.out.tab, and
+optionally with a flair junctions_from_sam BED.
 
-Writes a per-junction TSV over the union of the two junction sets and a summary
-TSV of section/metric/value rows.
+Writes a per-junction TSV over the union of the junction sets and a summary TSV
+of section/metric/value rows.
 
 STAR applies --outSJfilterOverhangMin (30 12 12 12) and --outSJfilterCountMin
 (3 1 1 1) to SJ.out.tab but not to the BAM, so an unfiltered intron-prospector
 run always finds more junctions than SJ.out.tab reports.  --filter picks a named
 filter that is applied to both sides, making the two sets comparable.
+
+The flair side cannot be filtered here: junctions_from_sam writes only the
+junctions whose entropy reaches its -c threshold and reports neither an anchor
+nor a unique read count.  --flair-confidence states the threshold it was run
+with, which must be at least what --filter requires.
 """
 import argparse
 from collections import Counter, namedtuple
@@ -18,10 +24,19 @@ NA = ""
 
 JuncKey = namedtuple("JuncKey", ("chrom", "start", "end"))
 
+STAR = "star"
+PROSPECTOR = "prospector"
+FLAIR = "flair"
+
 # SJ.out.tab has no header; see the STAR manual, section "Splice junctions".
 STAR_COLUMNS = ("chrom", "first_base1", "last_base1", "strand_code", "motif_code",
                 "annotated", "uniq_count", "multi_count", "max_overhang")
 STAR_TYPES = {c: int for c in STAR_COLUMNS[1:]}
+
+# junctions_from_sam writes a headerless BED6 whose interval is the intron and
+# whose score is the number of supporting alignments
+FLAIR_COLUMNS = ("chrom", "chrom_start", "chrom_end", "name", "score", "strand")
+FLAIR_TYPES = {"chrom_start": int, "chrom_end": int, "score": int}
 
 NON_CANONICAL = "non-canonical"
 
@@ -50,26 +65,33 @@ COMPARE_COLUMNS = ("chrom", "intron_start", "intron_end", "found",
                    "star_strand", "star_motif", "star_annotated",
                    "star_uniq", "star_multi", "star_overhang",
                    "ip_strand", "ip_motif", "ip_uniq", "ip_multi", "ip_unsure",
-                   "ip_max_left", "ip_max_right", "ip_anchor", "ip_confidence")
+                   "ip_max_left", "ip_max_right", "ip_anchor", "ip_confidence",
+                   "fl_strand", "fl_count")
 
-SUMMARY_COLUMNS = ("section", "metric", "star", "prospector", "value")
+SUMMARY_COLUMNS = ("section", "metric", "star", "prospector", "flair", "value")
 
 # fixed row order for the binned sections
 COUNT_BINS = ("1", "2", "3-9", "10-99", "100+")
 ANCHOR_BINS = ("1-4", "5-7", "8-11", "12-29", "30+")
 MOTIF_BINS = ("GT/AG", "GC/AG", "AT/AC", NON_CANONICAL, "no-genome")
 COUNT_KINDS = ("uniq", "multi", "total")
+HIGHER_KINDS = ("equal", "prospector_higher", "flair_higher")
 
 # Named filters, each applied to both sides so that what is left is closer to a
 # real disagreement than to a difference in what each tool reports.
-JuncFilter = namedtuple("JuncFilter", ("name", "min_anchor", "min_uniq_count", "doc"))
+JuncFilter = namedtuple("JuncFilter",
+                        ("name", "min_anchor", "min_uniq_count", "min_confidence", "doc"))
 
 FILTERS = {f.name: f for f in
-           (JuncFilter("raw", 0, 0,
-                       "everything both sides report"),
-            JuncFilter("filt_similar", 12, 1,
+           (JuncFilter("raw", 0, 0, 0.0,
+                       "everything each side reports"),
+            JuncFilter("filt_similar", 12, 1, 0.0,
                        "anchor of at least 12 and at least one uniquely mapped read, "
-                       "dropping junctions seen only on multi-mapping alignments"))}
+                       "dropping junctions seen only on multi-mapping alignments"),
+            JuncFilter("filt_flair", 0, 0, 1.0,
+                       "confidence of at least 1.0, the entropy threshold that both "
+                       "junctions_from_sam -c and intron-prospector "
+                       "--min-confidence-score default to"))}
 
 
 def filters_help():
@@ -120,6 +142,53 @@ class ProspectorCall(TsvRow):
         return self.uniq_mapped_count + self.multi_mapped_count + self.unsure_mapped_count
 
 
+class FlairJunc(TsvRow):
+    "one junctions_from_sam BED record, whose interval is the intron"
+
+    @property
+    def key(self):
+        return JuncKey(self.chrom, self.chrom_start, self.chrom_end)
+
+    @property
+    def total_count(self):
+        "supporting alignments, which junctions_from_sam caps at 1000"
+        return self.score
+
+
+class Juncs:
+    "the junction sets being compared; flair is None when no BED was given"
+
+    def __init__(self, star, prospector, flair):
+        self.star = star
+        self.prospector = prospector
+        self.flair = flair
+        self.sides = {STAR: set(star), PROSPECTOR: set(prospector)}
+        if flair is not None:
+            self.sides[FLAIR] = set(flair)
+
+    @property
+    def has_flair(self):
+        return self.flair is not None
+
+    def all_keys(self):
+        return set().union(*self.sides.values())
+
+    def shared(self):
+        "junctions every side reports"
+        return set.intersection(*self.sides.values())
+
+    def only(self, side):
+        "junctions this side reports and no other side does"
+        others = [keys for name, keys in self.sides.items() if name != side]
+        return self.sides[side].difference(*others)
+
+    def both(self, side1, side2):
+        return self.sides[side1] & self.sides[side2]
+
+    def found(self, key):
+        return "+".join(name for name, keys in self.sides.items() if key in keys)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--filter", choices=tuple(FILTERS.keys()), default="raw",
@@ -127,6 +196,10 @@ def parse_args():
     parser.add_argument("--main-chroms-only", action="store_true",
                         help="compare only chr1..chr22, chrX, chrY and chrM, leaving "
                         "out scaffolds, patches, alts and spike-ins")
+    parser.add_argument("--flair-bed",
+                        help="junctions_from_sam BED to compare as a third side")
+    parser.add_argument("--flair-confidence", type=float, default=1.0,
+                        help="junctions_from_sam -c that the BED was written with")
     parser.add_argument("sj_out_tab", help="STAR SJ.out.tab")
     parser.add_argument("intron_calls_tsv", help="intron-prospector --intron-calls output")
     parser.add_argument("out_compare_tsv", help="per-junction comparison TSV to create")
@@ -135,14 +208,22 @@ def parse_args():
     return opts, args
 
 
-def add_star(star, sj, path):
-    if sj.key in star:
+def check_flair_confidence(junc_filter, flair_confidence):
+    if junc_filter.min_confidence > flair_confidence:
         raise cli.PycbioException(
-            f"junction {sj.key.chrom}:{sj.key.start}-{sj.key.end} occurs more than once in "
-            f"{path}; a STAR run writes each junction once, so this file is several runs' "
-            "tabs concatenated and its counts are not those of one BAM.  Use the "
-            "SJ.out.tab written beside the BAM by the run that produced it")
-    star[sj.key] = sj
+            f"--filter={junc_filter.name} keeps junctions with a confidence of at least "
+            f"{junc_filter.min_confidence}, while --flair-confidence says the BED was "
+            "written with a threshold of "
+            f"{flair_confidence}, which leaves the flair side the less filtered one; "
+            f"rerun junctions_from_sam with -c {junc_filter.min_confidence}")
+
+
+def add_junc(juncs, junc, path, written_once):
+    if junc.key in juncs:
+        raise cli.PycbioException(
+            f"junction {junc.key.chrom}:{junc.key.start}-{junc.key.end} occurs more than "
+            f"once in {path}; {written_once}")
+    juncs[junc.key] = junc
 
 
 def select_main_chroms(juncs, path):
@@ -167,7 +248,10 @@ def load_star(sj_out_tab, junc_filter, main_chroms_only):
     reader = TsvReader(sj_out_tab, rowClass=StarSj, columns=STAR_COLUMNS,
                        typeMap=STAR_TYPES)
     for sj in reader:
-        add_star(star, sj, sj_out_tab)
+        add_junc(star, sj, sj_out_tab,
+                 "a STAR run writes each junction once, so this file is several runs' "
+                 "tabs concatenated and its counts are not those of one BAM.  Use the "
+                 "SJ.out.tab written beside the BAM by the run that produced it")
     if main_chroms_only:
         star = select_main_chroms(star, sj_out_tab)
     return {key: sj for key, sj in star.items() if star_kept(sj, junc_filter)}
@@ -175,32 +259,43 @@ def load_star(sj_out_tab, junc_filter, main_chroms_only):
 
 def prospector_kept(call, junc_filter):
     return ((call.anchor >= junc_filter.min_anchor) and
-            (call.uniq_mapped_count >= junc_filter.min_uniq_count))
-
-
-def add_prospector(calls, call, path):
-    if call.key in calls:
-        raise cli.PycbioException(
-            f"junction {call.key.chrom}:{call.key.start}-{call.key.end} occurs more than "
-            f"once in {path}; intron-prospector writes each junction once, so check that "
-            "the file is the output of a single run")
-    calls[call.key] = call
+            (call.uniq_mapped_count >= junc_filter.min_uniq_count) and
+            (call.confidence >= junc_filter.min_confidence))
 
 
 def load_prospector(intron_calls_tsv, junc_filter, main_chroms_only):
     calls = {}
     reader = TsvReader(intron_calls_tsv, rowClass=ProspectorCall, typeMap=PROSPECTOR_TYPES)
     for call in reader:
-        add_prospector(calls, call, intron_calls_tsv)
+        add_junc(calls, call, intron_calls_tsv,
+                 "intron-prospector writes each junction once, so check that the file "
+                 "is the output of a single run")
     if main_chroms_only:
         calls = select_main_chroms(calls, intron_calls_tsv)
     return {key: call for key, call in calls.items() if prospector_kept(call, junc_filter)}
 
 
-def found_label(sj, call):
-    if (sj is not None) and (call is not None):
-        return "both"
-    return "star" if sj is not None else "prospector"
+def load_flair(flair_bed, main_chroms_only):
+    "junctions_from_sam has already applied its entropy filter, so none is applied here"
+    flair = {}
+    reader = TsvReader(flair_bed, rowClass=FlairJunc, columns=FLAIR_COLUMNS,
+                       typeMap=FLAIR_TYPES)
+    for junc in reader:
+        add_junc(flair, junc, flair_bed,
+                 "junctions_from_sam writes each junction once, so check that the file "
+                 "is the output of a single run")
+    if main_chroms_only:
+        flair = select_main_chroms(flair, flair_bed)
+    return flair
+
+
+def load_juncs(opts, args, junc_filter):
+    flair = None
+    if opts.flair_bed is not None:
+        flair = load_flair(opts.flair_bed, opts.main_chroms_only)
+    return Juncs(load_star(args.sj_out_tab, junc_filter, opts.main_chroms_only),
+                 load_prospector(args.intron_calls_tsv, junc_filter, opts.main_chroms_only),
+                 flair)
 
 
 def star_fields(sj):
@@ -223,18 +318,27 @@ def prospector_fields(call):
             "ip_confidence": call.confidence}
 
 
-def write_compare_row(writer, key, sj, call):
+def flair_fields(junc):
+    if junc is None:
+        return dict.fromkeys(("fl_strand", "fl_count"), NA)
+    return {"fl_strand": junc.strand, "fl_count": junc.total_count}
+
+
+def write_compare_row(writer, juncs, key):
+    flair = juncs.flair.get(key) if juncs.has_flair else None
     writer.writeColumns(chrom=key.chrom, intron_start=key.start, intron_end=key.end,
-                        found=found_label(sj, call),
-                        **star_fields(sj), **prospector_fields(call))
+                        found=juncs.found(key),
+                        **star_fields(juncs.star.get(key)),
+                        **prospector_fields(juncs.prospector.get(key)),
+                        **flair_fields(flair))
 
 
-def write_compare(out_compare_tsv, star, prospector):
+def write_compare(out_compare_tsv, juncs):
     fileOps.ensureFileDir(out_compare_tsv)
     with fileOps.AtomicFileCreate(out_compare_tsv) as tmp_tsv:
         with TsvWriter(tmp_tsv, columns=COMPARE_COLUMNS) as writer:
-            for key in sorted(set(star) | set(prospector)):
-                write_compare_row(writer, key, star.get(key), prospector.get(key))
+            for key in sorted(juncs.all_keys()):
+                write_compare_row(writer, juncs, key)
 
 
 def count_bin(count):
@@ -254,28 +358,49 @@ def anchor_bin(anchor):
     return "12-29" if anchor < 30 else "30+"
 
 
-def pair_row(section, metric, star_value, prospector_value):
-    "a metric measured on both sides"
-    return (section, metric, star_value, prospector_value, NA)
+def metric_row(section, metric, *, star=NA, prospector=NA, flair=NA, value=NA):
+    return (section, metric, star, prospector, flair, value)
+
+
+def side_row(section, metric, star_value, prospector_value, flair_value=NA):
+    "a metric measured on each side"
+    return metric_row(section, metric, star=star_value, prospector=prospector_value,
+                      flair=flair_value)
 
 
 def value_row(section, metric, value):
     "a metric that is not per-tool, such as a count of agreeing junctions"
-    return (section, metric, NA, NA, value)
+    return metric_row(section, metric, value=value)
 
 
-def pair_tally(metrics, section, bins, star_counter, prospector_counter):
+def na_count(juncs):
+    "a side that is not in the comparison prints as an empty cell, not as zero"
+    return NA if juncs is None else len(juncs)
+
+
+def counter_value(counter, key):
+    return NA if counter is None else counter[key]
+
+
+def counted_sides(key, counters):
+    return any((counter is not None) and (key in counter) for counter in counters)
+
+
+def side_tally(metrics, section, bins, star_counter, prospector_counter,
+               flair_counter=None):
+    counters = (star_counter, prospector_counter, flair_counter)
     for key in bins:
-        if (key in star_counter) or (key in prospector_counter):
-            metrics.append(pair_row(section, key, star_counter[key],
-                                    prospector_counter[key]))
+        if counted_sides(key, counters):
+            metrics.append(side_row(section, key, counter_value(star_counter, key),
+                                    counter_value(prospector_counter, key),
+                                    counter_value(flair_counter, key)))
 
 
 def star_tally(metrics, section, keys, counter):
-    "a breakdown STAR reports and intron-prospector has no counterpart for"
+    "a breakdown STAR reports and the other tools have no counterpart for"
     for key in keys:
         if key in counter:
-            metrics.append(pair_row(section, key, counter[key], NA))
+            metrics.append(side_row(section, key, counter[key], NA))
 
 
 def value_tally(metrics, section, keys, counter):
@@ -285,7 +410,7 @@ def value_tally(metrics, section, keys, counter):
 
 
 class OnlyTally:
-    "breakdown of the junctions one tool found and the other did not"
+    "breakdown of the junctions one tool found and no other tool did"
 
     def __init__(self):
         self.by_read_count = Counter()
@@ -293,38 +418,54 @@ class OnlyTally:
         self.by_motif = Counter()
         self.by_annotated = Counter()
 
-    def add(self, read_count, anchor, motif):
+    def add_count(self, read_count):
         self.by_read_count[count_bin(read_count)] += 1
+
+    def add(self, read_count, anchor, motif):
+        self.add_count(read_count)
         self.by_anchor[anchor_bin(anchor)] += 1
         self.by_motif[motif] += 1
 
 
-def tally_star_only(star, prospector):
+def tally_star_only(juncs):
     tally = OnlyTally()
-    for key in set(star) - set(prospector):
-        sj = star[key]
+    for key in juncs.only(STAR):
+        sj = juncs.star[key]
         tally.add(sj.total_count, sj.max_overhang, sj.motif)
         tally.by_annotated["annotated" if sj.annotated else "novel"] += 1
     return tally
 
 
-def tally_prospector_only(star, prospector):
+def tally_prospector_only(juncs):
     tally = OnlyTally()
-    for key in set(prospector) - set(star):
-        call = prospector[key]
+    for key in juncs.only(PROSPECTOR):
+        call = juncs.prospector[key]
         tally.add(call.total_count, call.anchor,
                   call.motif if call.motif != NA else "no-genome")
     return tally
 
 
-def summarize_only(metrics, star, prospector):
-    star_only = tally_star_only(star, prospector)
-    prospector_only = tally_prospector_only(star, prospector)
-    pair_tally(metrics, "only_by_read_count", COUNT_BINS,
-               star_only.by_read_count, prospector_only.by_read_count)
-    pair_tally(metrics, "only_by_anchor", ANCHOR_BINS,
+def tally_flair_only(juncs):
+    "junctions_from_sam reports neither an anchor nor a motif, hence a count only"
+    tally = OnlyTally()
+    for key in juncs.only(FLAIR):
+        tally.add_count(juncs.flair[key].total_count)
+    return tally
+
+
+def only_counter(tally, name):
+    return None if tally is None else getattr(tally, name)
+
+
+def summarize_only(metrics, juncs):
+    star_only = tally_star_only(juncs)
+    prospector_only = tally_prospector_only(juncs)
+    flair_only = tally_flair_only(juncs) if juncs.has_flair else None
+    side_tally(metrics, "only_by_read_count", COUNT_BINS, star_only.by_read_count,
+               prospector_only.by_read_count, only_counter(flair_only, "by_read_count"))
+    side_tally(metrics, "only_by_anchor", ANCHOR_BINS,
                star_only.by_anchor, prospector_only.by_anchor)
-    pair_tally(metrics, "only_by_motif", MOTIF_BINS,
+    side_tally(metrics, "only_by_motif", MOTIF_BINS,
                star_only.by_motif, prospector_only.by_motif)
     star_tally(metrics, "only_by_annotated", ("annotated", "novel"),
                star_only.by_annotated)
@@ -387,22 +528,23 @@ def tally_shared_junction(tally, sj, call):
 
 def summarize_read_sums(metrics, tally):
     "STAR has no counterpart to unsure_mapped_count, hence the empty cell"
-    metrics.append(pair_row("shared_read_sums", "uniq",
+    metrics.append(side_row("shared_read_sums", "uniq",
                             tally.star_sums["uniq"], tally.prospector_sums["uniq"]))
-    metrics.append(pair_row("shared_read_sums", "multi",
+    metrics.append(side_row("shared_read_sums", "multi",
                             tally.star_sums["multi"], tally.prospector_sums["multi"]))
-    metrics.append(pair_row("shared_read_sums", "unsure",
+    metrics.append(side_row("shared_read_sums", "unsure",
                             NA, tally.prospector_sums["unsure"]))
-    metrics.append(pair_row("shared_read_sums", "total",
+    metrics.append(side_row("shared_read_sums", "total",
                             tally.star_sums["total"], tally.prospector_sums["total"]))
 
 
-def summarize_shared(metrics, shared, star, prospector):
+def summarize_shared(metrics, juncs):
+    "the shared_ sections are STAR against intron-prospector, whatever else is compared"
     tally = SharedTally()
-    for key in shared:
-        tally_shared_junction(tally, star[key], prospector[key])
+    for key in juncs.both(STAR, PROSPECTOR):
+        tally_shared_junction(tally, juncs.star[key], juncs.prospector[key])
     summarize_read_sums(metrics, tally)
-    pair_tally(metrics, "shared_count_higher", COUNT_KINDS,
+    side_tally(metrics, "shared_count_higher", COUNT_KINDS,
                tally.star_higher, tally.prospector_higher)
     value_tally(metrics, "shared_count_equal", COUNT_KINDS, tally.equal)
     value_tally(metrics, "shared_strand", ("agree", "disagree", "undetermined"),
@@ -411,24 +553,61 @@ def summarize_shared(metrics, shared, star, prospector):
                 tally.motif)
 
 
-def summarize_totals(metrics, star, prospector):
-    shared = set(star) & set(prospector)
-    metrics.append(pair_row("totals", "junctions", len(star), len(prospector)))
-    metrics.append(value_row("totals", "shared", len(shared)))
-    metrics.append(pair_row("totals", "only", len(star) - len(shared),
-                            len(prospector) - len(shared)))
-    return shared
+def count_compare(prospector_count, flair_count):
+    if prospector_count == flair_count:
+        return "equal"
+    return "prospector_higher" if prospector_count > flair_count else "flair_higher"
 
 
-def summarize(opts, junc_filter, star, prospector):
-    metrics = [value_row("params", "filter", junc_filter.name),
-               value_row("params", "min_anchor", junc_filter.min_anchor),
-               value_row("params", "min_uniq_count", junc_filter.min_uniq_count),
-               value_row("params", "main_chroms_only",
-                         "yes" if opts.main_chroms_only else "no")]
-    shared = summarize_totals(metrics, star, prospector)
-    summarize_only(metrics, star, prospector)
-    summarize_shared(metrics, shared, star, prospector)
+def summarize_pros_flair(metrics, juncs):
+    """read counts over the junctions intron-prospector and flair share; the two
+    count different sets of alignments and junctions_from_sam caps its count at 1000"""
+    tally = Counter()
+    for key in juncs.both(PROSPECTOR, FLAIR):
+        tally[count_compare(juncs.prospector[key].total_count,
+                            juncs.flair[key].total_count)] += 1
+    value_tally(metrics, "shared_pros_flair_count", HIGHER_KINDS, tally)
+
+
+def summarize_totals(metrics, juncs):
+    only = {side: juncs.only(side) for side in juncs.sides}
+    metrics.append(side_row("totals", "junctions", len(juncs.star), len(juncs.prospector),
+                            na_count(juncs.flair)))
+    metrics.append(value_row("totals", "shared", len(juncs.shared())))
+    metrics.append(side_row("totals", "only", len(only[STAR]), len(only[PROSPECTOR]),
+                            na_count(only.get(FLAIR))))
+
+
+def summarize_overlaps(metrics, juncs):
+    "pairwise overlaps, which the totals section does not give once there are three sides"
+    metrics.append(value_row("overlaps", "star+prospector",
+                             len(juncs.both(STAR, PROSPECTOR))))
+    metrics.append(value_row("overlaps", "star+flair", len(juncs.both(STAR, FLAIR))))
+    metrics.append(value_row("overlaps", "prospector+flair",
+                             len(juncs.both(PROSPECTOR, FLAIR))))
+
+
+def summarize_params(metrics, opts, junc_filter, has_flair):
+    metrics.append(value_row("params", "filter", junc_filter.name))
+    metrics.append(value_row("params", "min_anchor", junc_filter.min_anchor))
+    metrics.append(value_row("params", "min_uniq_count", junc_filter.min_uniq_count))
+    metrics.append(value_row("params", "min_confidence", junc_filter.min_confidence))
+    metrics.append(value_row("params", "main_chroms_only",
+                             "yes" if opts.main_chroms_only else "no"))
+    if has_flair:
+        metrics.append(value_row("params", "flair_confidence", opts.flair_confidence))
+
+
+def summarize(opts, junc_filter, juncs):
+    metrics = []
+    summarize_params(metrics, opts, junc_filter, juncs.has_flair)
+    summarize_totals(metrics, juncs)
+    if juncs.has_flair:
+        summarize_overlaps(metrics, juncs)
+    summarize_only(metrics, juncs)
+    summarize_shared(metrics, juncs)
+    if juncs.has_flair:
+        summarize_pros_flair(metrics, juncs)
     return metrics
 
 
@@ -436,17 +615,18 @@ def write_summary(out_summary_tsv, metrics):
     fileOps.ensureFileDir(out_summary_tsv)
     with fileOps.AtomicFileCreate(out_summary_tsv) as tmp_tsv:
         with TsvWriter(tmp_tsv, columns=SUMMARY_COLUMNS) as writer:
-            for section, metric, star, prospector, value in metrics:
+            for section, metric, star, prospector, flair, value in metrics:
                 writer.writeColumns(section=section, metric=metric, star=star,
-                                    prospector=prospector, value=value)
+                                    prospector=prospector, flair=flair, value=value)
 
 
 def sj_compare(opts, args):
     junc_filter = FILTERS[opts.filter]
-    star = load_star(args.sj_out_tab, junc_filter, opts.main_chroms_only)
-    prospector = load_prospector(args.intron_calls_tsv, junc_filter, opts.main_chroms_only)
-    write_compare(args.out_compare_tsv, star, prospector)
-    write_summary(args.out_summary_tsv, summarize(opts, junc_filter, star, prospector))
+    if opts.flair_bed is not None:
+        check_flair_confidence(junc_filter, opts.flair_confidence)
+    juncs = load_juncs(opts, args, junc_filter)
+    write_compare(args.out_compare_tsv, juncs)
+    write_summary(args.out_summary_tsv, summarize(opts, junc_filter, juncs))
 
 
 def main():
