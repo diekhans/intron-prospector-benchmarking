@@ -1,0 +1,3 @@
+name	bam	sj_out_tab	genome	min_intron	max_intron	star_sj_overhang_min
+A549	/private/groups/brookslab/tswon/brooks_berger_collab/CCLE_depmap/fastq_celllines/bam_files_step4_20260324/A549_CCLE.Aligned.sortedByCoord.out.bam	/private/groups/brookslab/tswon/brooks_berger_collab/CCLE_depmap/fastq_celllines/bam_files_step4_20260324/A549_CCLE.SJ.out.tab	data/GRCh38.p14.genome.fa.gz	21	500000	5
+WTC11	/private/groups/brookslab/cafelton/lrgasp-r2c2-flair/WTC11-illumina-STAR/lrgasp-WTC11-illumina-all-STARAligned.sortedByCoord.out.bam	/private/groups/brookslab/cafelton/lrgasp-r2c2-flair/WTC11-illumina-STAR/lrgasp-WTC11-illumina-all-STARSJ.out.tab	/private/groups/brookslab/cafelton/lrgasp-r2c2-flair/lrgasp_grch38_sirvs.fasta	20	1000000	8

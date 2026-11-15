@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Run intron-prospector on one benchmark dataset.
+
+All intron-prospector filtering is disabled, so the calls file holds everything
+the BAM contains.  The STAR SJ.out.tab filters are emulated after the fact by
+sj-compare, which avoids a second pass over a multi-gigabyte BAM.
+"""
+import argparse
+import os.path as osp
+import sys
+import pipettor
+from pycbio.sys import cli, fileOps
+from pycbio.tsv import TsvReader, TsvRow
+
+BENCH_DIR = osp.dirname(osp.dirname(osp.abspath(__file__)))
+DATASETS_TSV = osp.join(BENCH_DIR, "conf", "datasets.tsv")
+
+# default build of the intron-prospector source tree, checked out beside this
+# one; the Makefile passes --prospector, so this is for running by hand
+PROSPECTOR = osp.join(osp.dirname(BENCH_DIR), "intronProspector", "bin",
+                      "intron-prospector")
+
+DATASET_TYPES = {"min_intron": int, "max_intron": int, "star_sj_overhang_min": int}
+
+
+class Dataset(TsvRow):
+    """one row of conf/datasets.tsv; a relative path in the file is relative to
+    the top of this repository, not to the current directory"""
+
+    def _resolve(self, path):
+        return path if osp.isabs(path) else osp.join(BENCH_DIR, path)
+
+    @property
+    def bam_path(self):
+        return self._resolve(self.bam)
+
+    @property
+    def sj_out_tab_path(self):
+        return self._resolve(self.sj_out_tab)
+
+    @property
+    def has_genome(self):
+        return self.genome != ""
+
+    @property
+    def genome_path(self):
+        return self._resolve(self.genome)
+
+    @property
+    def genome_index_paths(self):
+        "faidx index, plus the bgzf block index when the FASTA is compressed"
+        if self.genome_path.endswith(".gz"):
+            return [self.genome_path + ".fai", self.genome_path + ".gzi"]
+        return [self.genome_path + ".fai"]
+
+
+def load_datasets():
+    return {ds.name: ds for ds in TsvReader(DATASETS_TSV, rowClass=Dataset,
+                                            typeMap=DATASET_TYPES)}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--prospector", default=PROSPECTOR,
+                        help="intron-prospector binary to benchmark")
+    parser.add_argument("dataset", help="dataset name in conf/datasets.tsv")
+    parser.add_argument("out_calls_tsv", help="intron calls TSV to create")
+    opts, args = cli.parseOptsArgsWithLogging(parser)
+    if args.dataset not in load_datasets():
+        parser.error(f"unknown dataset '{args.dataset}'; conf/datasets.tsv has: "
+                     + ", ".join(load_datasets().keys()))
+    return opts, args
+
+
+def check_inputs(dataset):
+    "fail before a long run rather than part way through it"
+    paths = [dataset.bam_path, dataset.sj_out_tab_path]
+    if dataset.has_genome:
+        paths += [dataset.genome_path] + dataset.genome_index_paths
+    missing = [p for p in paths if not osp.exists(p)]
+    if missing:
+        raise cli.PycbioException(f"dataset {dataset.name} inputs not found, "
+                                  "correct conf/datasets.tsv: " + ", ".join(missing))
+
+
+def genome_opts(dataset):
+    if not dataset.has_genome:
+        return []
+    # targets absent from the genome are skipped rather than killing a long run
+    return [f"--genome-fasta={dataset.genome_path}", "--skip-missing-targets"]
+
+
+def prospector_cmd(opts, dataset, out_tsv):
+    return [opts.prospector,
+            "--min-confidence-score=0.0",
+            "--sj-filter=all",
+            "--min-anchor-length=1",
+            f"--min-intron-length={dataset.min_intron}",
+            f"--max-intron-length={dataset.max_intron}",
+            *genome_opts(dataset),
+            f"--intron-calls={out_tsv}",
+            dataset.bam_path]
+
+
+def run_prospector(opts, args):
+    dataset = load_datasets()[args.dataset]
+    check_inputs(dataset)
+    fileOps.ensureFileDir(args.out_calls_tsv)
+    with fileOps.AtomicFileCreate(args.out_calls_tsv) as tmp_tsv:
+        cmd = prospector_cmd(opts, dataset, tmp_tsv)
+        print("running:", " ".join(cmd), file=sys.stderr, flush=True)
+        pipettor.run(cmd, stderr=2)
+
+
+def main():
+    opts, args = parse_args()
+    with cli.ErrorHandler(noStackExcepts=(OSError, cli.PycbioException)):
+        run_prospector(opts, args)
+
+
+main()

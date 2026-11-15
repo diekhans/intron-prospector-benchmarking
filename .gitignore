@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# benchmark outputs and inputs
+output/
+data/
+tmp/
+log
+.emacs.bak/

@@ -1,0 +1,198 @@
+#+TITLE: Why WTC11 SJ.out.tab junctions are missing from intron-prospector calls
+#+DATE: 2026-11-15
+
+* Conclusion
+
+STAR copies the Illumina chastity filter flag into SAM flag 0x200, counts those
+alignments in SJ.out.tab, and intron-prospector skips them.  All 20 junctions in
+a random sample were supported only by alignments intron-prospector skips: 15 by
+0x200 alignments alone, 5 by 0x200 plus secondary alignments.  None was a case
+of intron-prospector reading an alignment and failing to report its junction.
+
+* Sample
+
+- Population: the 4,211 WTC11 junctions in SJ.out.tab that the calls file does
+  not contain at any threshold, from output/WTC11.raw.compare.tsv.gz with
+  found = star, restricted to star_uniq at least 1 and star_overhang at least 12.
+- 20 drawn with random.Random(20261115).sample.
+- All 20 are annotated, 18 have star_uniq 1 and 2 have star_uniq 2, star_overhang
+  runs 15 to 49, 19 are GT/AG and 1 is GC/AG.
+
+* Method
+
+- Indexed the BAM into benchmark/data/WTC11.illumina.bam.bai, since its own
+  directory is not writable.
+- For each junction, fetched every alignment covering the last exon base, parsed
+  all N operations out of the CIGAR, and kept those whose N matches the junction
+  exactly.
+- Classified each supporting alignment by the flags intron-prospector acts on.
+
+* Result
+
+| verdict                                            |  n |
+|----------------------------------------------------+----|
+| carried only by QC fail alignments                 | 15 |
+| carried only by QC fail and secondary alignments   |  5 |
+| carried by an alignment intron-prospector reads    |  0 |
+| no alignment carries the N operation               |  0 |
+
+Example, chr1:100912246-100913662, star_uniq 1, star_multi 12, star_overhang 32:
+
+: alignments covering the last exon base: 121
+: alignments with this N operation: 14
+:   QC fail    flag  675 NH 1 proper True anchor 32 32M1416N68M
+:   secondary  flag  403 NH 3 proper True anchor  1 1M1416N99M
+:   ... 12 more secondary alignments
+
+* Flags
+
+The difference is which SAM FLAG bits each tool acts on.  Only four bits matter
+here, and only two of them are set in this BAM.
+
+| bit   | name          | set in this BAM                                 | SJ.out.tab          | intron-prospector                               |
+|-------+---------------+-------------------------------------------------+---------------------+-------------------------------------------------|
+| 0x200 | QCFAIL        | yes, by STAR from the Illumina chastity filter field in the FASTQ header | counted in uniq and multi | alignment never read, process_alignment         |
+| 0x100 | SECONDARY     | yes, for the other loci of a multi-mapping read  | counted in multi    | junction not recorded, junction_qc; read counted as multi mapped |
+| 0x400 | DUP           | no                                              | n/a                 | alignment never read, process_alignment         |
+| 0x800 | SUPPLEMENTARY | no                                              | n/a                 | read counted as multi mapped                    |
+
+0x1, 0x2 and 0x8 are read only to decide a read category: a proper pair is
+categorised by its NH tag, anything else is counted as unsure.
+
+Counts by flag:
+
+| class                       | supporting alignments, 20 sampled junctions | alignments in chr1:100912000-100914000 |
+|-----------------------------+---------------------------------------------+----------------------------------------|
+| QCFAIL 0x200                |                                          27 | 34 of 559, 6.1%                        |
+| SECONDARY 0x100             |                                          18 | 89 of 559, 15.9%                       |
+| both bits                   |                                           0 | 2                                      |
+| DUP 0x400                   |                                           0 | 0                                      |
+| SUPPLEMENTARY 0x800         |                                           0 | 0                                      |
+| none of these, read by both |                                           0 | 438                                    |
+
+Anchor length separates the two set bits:
+
+- The 27 QCFAIL alignments have anchors 3 to 49, median 32, matching the
+  star_overhang values 15 to 49 in the sample.  They are ordinary alignments
+  that differ only in the filter bit.
+- All 18 SECONDARY alignments have an anchor of 1 or 2.  They would be removed
+  by any anchor threshold even if intron-prospector read them.
+
+* The chastity filter
+
+Chastity is a per base call measure of signal purity on the sequencer, computed
+from the cluster image, not from the alignment.
+
+- Chastity of one base call is the brightest channel intensity divided by the
+  sum of the brightest and second brightest.  It runs from 0.5, two channels
+  equally bright, to 1.0, one channel only.
+- Illumina's purity filter marks a cluster as not passing when more than one of
+  the first 25 cycles has chastity below 0.6.  The usual cause is two
+  overlapping clusters, so the base calls come from a mixture of templates.
+- The read is still base called and still written to the FASTQ.  The filter
+  result is the second field of the header comment, 1:Y:0:INDEX, where Y means
+  the read is filtered, that is, it did not pass.  N means it passed.
+- bcl2fastq and bcl-convert write all reads by default, so a FASTQ holds both
+  classes unless the run was demultiplexed with a pass-filter-only option.
+- Chastity says nothing about mapping.  A chastity filtered read can align
+  uniquely with a full length match, as the 27 alignments above do.
+
+* Why this matters
+
+- 0x200 alone accounts for the WTC11 difference.  Every sampled junction has at
+  least one QCFAIL alignment and no alignment with none of these bits set.
+  Clearing 0x200 on one alignment makes its junction appear.
+- The two tools report counts over different read sets, so the junction counts
+  are not directly comparable, nor are read-count thresholds applied to them.
+- SECONDARY is not a second cause.  No sampled junction was carried by
+  secondary alignments alone, and their anchors of 1 or 2 are below any
+  threshold worth comparing.
+- The fix is a choice of read set, not a bug fix in either tool.  Either filter
+  the BAM for both tools, or add an intron-prospector option to include QCFAIL
+  alignments.
+- The effect scales with the fraction of reads the sequencer flagged, 5.3% in
+  this FASTQ.  A dataset with no chastity filter flags will not show it.
+
+* Root cause
+
+1. The FASTQ carries the Illumina filter flag: 5,336 of 100,000 sampled headers
+   in WTC11-illumina-all_1.fastq read 1:Y:0:..., the did-not-pass form.
+   The one alignment supporting chr1:100912246-100913662 is read
+   HISEQ:1286:HKCGCBCX3:2:1109:15948:36588, whose header in
+   WTC11-illumina-all_2.fastq is 2:Y:0:CGAGGCTGGCGTAAGA.
+2. STAR sets SAM flag 0x200 from that flag.
+3. STAR still aligns those reads and still counts them in SJ.out.tab.  The
+   junction above has star_uniq 1 from exactly this one alignment.
+4. intron-prospector skips them.  In the intronProspector tree,
+   src/junctions_extractor.cc:
+
+   - process_alignment ignores any alignment with BAM_FQCFAIL or BAM_FDUP
+   - get_read_category signals a logic error if one reaches it
+   - junction_qc rejects BAM_FSECONDARY
+
+* Evidence
+
+- Single alignment reproduction.  One SAM record, flag 675, which is 0x200 plus
+  proper pair, second in pair and mate reverse:
+
+  : samtools view -X -b -o one.bam BAM BAI chr1:100912000-100914000
+  : intron-prospector --min-confidence-score=0.0 --sj-filter=all \
+  :     --min-anchor-length=1 --min-intron-length=20 --max-intron-length=1000000 \
+  :     --intron-calls=one.calls.tsv one.bam
+
+  The calls file has a header and no rows.  Clearing 0x200 from that one flag,
+  675 to 163, and nothing else, makes intron-prospector report the junction with
+  uniq_mapped_count 1 and overhangs 32 and 68.  That is the minimum controlling
+  change.
+
+- Region reproduction.  chr1:100912000-100914000 holds 559 alignments carrying
+  10 distinct N operations.  Counting each N operation by the class of the
+  alignment that carries it, where usable means neither 0x200 nor secondary:
+
+  | intron_start | intron_end | usable | 0x200 | secondary | reported |
+  |--------------+------------+--------+-------+-----------+----------|
+  |    100906965 |  100911062 |     20 |     1 |         2 | yes      |
+  |    100911150 |  100912111 |     90 |     4 |         9 | yes      |
+  |    100911150 |  100912575 |      1 |     0 |         0 | yes      |
+  |    100911150 |  100913662 |      0 |     1 |         4 | no       |
+  |    100912238 |  100913662 |     91 |     5 |         5 | yes      |
+  |    100912246 |  100913662 |      0 |     1 |        13 | no       |
+  |    100913806 |  100918076 |    116 |     7 |         6 | yes      |
+  |    100913806 |  100961827 |      1 |     0 |         6 | yes      |
+  |    100918127 |  100921705 |     69 |     2 |         5 | yes      |
+  |    100961918 |  100965768 |      0 |     0 |         3 | no       |
+
+  Reported exactly when usable is not zero.  The reported counts equal the
+  usable counts in every case: uniq plus multi is 20, 90, 1, 91, 116, 1 and 69.
+
+- Rate.  34 of the 559 alignments in that region carry 0x200, 6.1%, against
+  5.3% of reads flagged in the FASTQ.
+
+- Per read link.  The read behind the 0x200 alignment in the single alignment
+  test is flagged Y in the FASTQ, so the chain from FASTQ to flag to skipped
+  alignment is closed on one junction, not only by rate.
+
+* Scope
+
+- 0 of 20 sampled junctions pointed at a defect in junction extraction itself.
+- The sample covers the 4,211 junctions absent from the calls, not the other
+  2,168 STAR-only junctions under filt_similar, which are in the calls and are
+  removed by the anchor and unique-read thresholds.
+- Every dataset whose FASTQ carries Illumina filter flags will show this.  A549
+  has not been checked.
+
+* Consequences
+
+- The two tools count different read sets.  STAR's SJ.out.tab includes chastity
+  filtered reads; intron-prospector excludes them.  This accounts for the bulk of
+  the WTC11 junctions STAR reports and intron-prospector does not.
+- Options, none taken here: add an intron-prospector option to include
+  BAM_FQCFAIL alignments, or filter the BAM before both tools so they see the
+  same reads.
+
+* Files
+
+- Sample and per junction detail: the scripts under the session scratchpad named
+  sample_star_only.py, why_missing.py and tally_region.py.
+- Comparison inputs: output/WTC11.raw.compare.tsv.gz and
+  output/WTC11.filt_similar.compare.tsv.gz.
