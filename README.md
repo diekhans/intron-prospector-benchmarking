@@ -23,7 +23,7 @@ SAM line, around 28,000 alignments a second, so WTC11's 256 million alignments
 take about two and a half hours.
 
 The binary under test is `${prospectorDir}/bin/intron-prospector`, where
-`prospectorDir` defaults to `../intronProspector`, the intron-prospector source
+`prospectorDir` defaults to `../intron-prospector`, the intron-prospector source
 tree checked out beside this one.  The Makefile builds it if it is missing.
 Use `make prospectorDir=/some/where` for another checkout.
 

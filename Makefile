@@ -17,7 +17,7 @@ outDir = output
 
 # intron-prospector source tree, which is a separate repository;
 # `make prospectorDir=/some/where` to build against another one
-prospectorDir = ../intronProspector
+prospectorDir = ../intron-prospector
 prospector = ${prospectorDir}/bin/intron-prospector
 
 # flair's junctions_from_sam, in the flair-mddev conda environment beside the

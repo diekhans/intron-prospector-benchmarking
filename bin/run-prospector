@@ -17,7 +17,7 @@ import benchconf
 
 # default build of the intron-prospector source tree, checked out beside this
 # one; the Makefile passes --prospector, so this is for running by hand
-PROSPECTOR = osp.join(osp.dirname(benchconf.BENCH_DIR), "intronProspector", "bin",
+PROSPECTOR = osp.join(osp.dirname(benchconf.BENCH_DIR), "intron-prospector", "bin",
                       "intron-prospector")
 
 
