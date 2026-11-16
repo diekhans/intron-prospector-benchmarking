@@ -4,6 +4,9 @@
 All intron-prospector filtering is disabled, so the calls file holds everything
 the BAM contains.  The STAR SJ.out.tab filters are emulated after the fact by
 sj-compare, which avoids a second pass over a multi-gigabyte BAM.
+
+--keep-qcfail cannot be deferred that way, since which alignments are read is
+decided during the pass, so it makes a second calls file rather than a filter.
 """
 import argparse
 import os.path as osp
@@ -22,6 +25,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prospector", default=PROSPECTOR,
                         help="intron-prospector binary to benchmark")
+    parser.add_argument("--keep-qcfail", action="store_true",
+                        help="count the alignments the sequencer's chastity filter "
+                        "flagged, which SJ.out.tab counts and intron-prospector skips "
+                        "by default")
     parser.add_argument("dataset", help="dataset name in conf/datasets.tsv")
     parser.add_argument("out_calls_tsv", help="intron calls TSV to create")
     opts, args = cli.parseOptsArgsWithLogging(parser)
@@ -43,11 +50,16 @@ def genome_opts(dataset):
     return [f"--genome-fasta={dataset.genome_path}", "--skip-missing-targets"]
 
 
+def qcfail_opts(opts):
+    return ["--include=qcfail"] if opts.keep_qcfail else []
+
+
 def prospector_cmd(opts, dataset, out_tsv):
     return [opts.prospector,
             "--min-confidence-score=0.0",
             "--sj-filter=all",
             "--min-anchor-length=1",
+            *qcfail_opts(opts),
             f"--min-intron-length={dataset.min_intron}",
             f"--max-intron-length={dataset.max_intron}",
             *genome_opts(dataset),

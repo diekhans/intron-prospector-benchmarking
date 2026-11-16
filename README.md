@@ -16,7 +16,8 @@ Compares three sets of junctions over one STAR BAM:
 make -j                                     # one job per dataset
 ```
 
-Each dataset is two passes over a 14-22 GB BAM, one per tool.
+Each dataset is three passes over a 14-22 GB BAM: two intron-prospector runs
+and one junctions_from_sam run.
 `junctions_from_sam` reads the BAM with pysam and converts each record back to a
 SAM line, around 28,000 alignments a second, so WTC11's 256 million alignments
 take about two and a half hours.
@@ -50,7 +51,7 @@ directory, not to the current directory:
 Current rows:
 
 - A549: CCLE SRR8616017, STAR 2.7.11b, GRCh38 primary + GENCODE v49, paired end.
-  `--alignIntronMax 500000`, `--outSAMstrandField intronMotif` so the BAM carries XS.
+  `--alignIntronMax 500000`, `--outSAMstrandField intronMotif` so the BAM has XS tags.
   Genome is `data/GRCh38.p14.genome.fa.gz`.  The STAR index that BAM was built
   against is not readable, so this is the GENCODE release rather than that exact
   index input; the BAM names the 169 scaffolds by bare accession, `GL000008.2`
@@ -71,6 +72,22 @@ holds everything in the BAM:
 - `--min-intron-length` / `--max-intron-length` set from the STAR run
 
 `bin/sj-compare` filters afterwards, which avoids a second pass over the BAM.
+
+### Runs
+
+Which alignments intron-prospector reads is decided during the pass, so it
+cannot be deferred to `bin/sj-compare` the way the thresholds are.  Each
+dataset therefore gets one pass per run named in the Makefile's `runs`, each
+writing `output/<ds>.<run>.calls.tsv`:
+
+- `base`, the default, which skips the alignments flagged by the sequencer's
+  chastity filter, QC fail, along with duplicates and secondary alignments
+- `qcfail`, `--include=qcfail`, which counts the QC fail alignments
+
+`SJ.out.tab` counts QC fail alignments, and `junctions_from_sam` does not look
+at the flags at all, so `qcfail` is the run whose read set is closest to both.
+It is the control for `doc/wtc11-star-only.org`, where QC fail alignments
+account for the WTC11 junctions STAR reports and intron-prospector does not.
 
 ## How junctions_from_sam is run
 
@@ -144,14 +161,15 @@ concatenated, whose counts are over different reads than the BAM holds.
 
 Outputs in `output/`:
 
-- `<ds>.calls.tsv` intron-prospector `--intron-calls` output
-- `<ds>.flair.bed` `junctions_from_sam` output
-- `<ds>.<filter>.compare.tsv.gz` one row per junction in the union of the sets;
-  `found` names the sides that have it, joined by `+`, such as `star`,
+- `<ds>.<run>.calls.tsv` intron-prospector `--intron-calls` output
+- `<ds>.flair.bed` `junctions_from_sam` output, one per dataset, since it reads
+  every alignment whatever the run
+- `<ds>.<run>.<filter>.compare.tsv.gz` one row per junction in the union of the
+  sets; `found` names the sides that have it, joined by `+`, such as `star`,
   `star+prospector` or `star+prospector+flair`
-- `<ds>.<filter>.summary.tsv` `section`, `metric`, `star`, `prospector`,
+- `<ds>.<run>.<filter>.summary.tsv` `section`, `metric`, `star`, `prospector`,
   `flair`, `value` rows; the `params` section records which filter produced the
-  file
+  file, and the file name which run
 
 Summary sections:
 
@@ -182,35 +200,66 @@ equivalent intron-prospector reports to `SJ.out.tab` column 9.
   are absent from the calls.  STAR copies the Illumina chastity filter into SAM
   flag 0x200 and counts those alignments; intron-prospector skips them.
 
-## Reasons the tools legitimately differ
+## Where intron-prospector differs from STAR
+
+None of these is a defect in either tool.  They are the reasons two correct
+tools report different junctions from one BAM.
+
+### Which alignments are counted
+
+- STAR counts the alignments the sequencer's chastity filter flagged, SAM flag
+  0x200; intron-prospector skips them unless `--include=qcfail`.  This is the
+  largest single cause on a dataset whose reads are flagged: see the `qcfail` run
+  above and `doc/wtc11-star-only.org`.
+- STAR counts secondary alignments in column 8; intron-prospector skips them
+  unless `--include=secondary`.  A junction crossed only by secondary
+  alignments is therefore STAR-only.
+- `uniq` and `multi` are not the same partition on the two sides:
+  intron-prospector also has `unsure_mapped_count`, for an alignment with no NH
+  tag, a discordant pair, or a mate that did not map.  STAR has no counterpart.
+- For paired-end data, STAR counts a fragment once when both mates cross a
+  junction; intron-prospector counts each alignment.  Read `shared_read_sums`
+  before taking a per-junction count difference for a defect.
+
+### Which junctions are written
 
 - STAR applies `--outSJfilterOverhangMin` (default 30 12 12 12, by motif),
   `--outSJfilterCountUniqueMin` / `CountTotalMin` (3 1 1 1),
   `--outSJfilterDistToOtherSJmin` and `--outSJfilterIntronMaxVsReadN`
-  (50000 100000 200000) to `SJ.out.tab` only, not to the BAM. A long intron with
-  few supporting reads is dropped from the tab while its alignment stays in the BAM.
-- Junctions in the annotation bypass those filters, so `SJ.out.tab` contains
-  rows with overhang 1.
-- STAR column 9 is the maximum over reads of `min(left, right)`;
+  (50000 100000 200000) to `SJ.out.tab` only, not to the BAM.  A long intron
+  with few supporting reads is dropped from the tab while its alignment stays
+  in the BAM, so intron-prospector reports it.
+- Junctions in the annotation bypass those filters, so `SJ.out.tab` holds rows
+  with an overhang of 1 that no threshold on the calls side will match.
+- intron-prospector filters what the BAM holds, with `--min-anchor-length`,
+  `--min-intron-length`, `--max-intron-length`, `--min-confidence-score`,
+  `--min-read-count` and `--sj-filter`.  `bin/run-prospector` turns all of them
+  off so `bin/sj-compare` can apply them afterwards.
+
+### Columns that do not line up
+
+- STAR column 9 is the maximum over reads of `min(left, right)`.
   `max_left_overhang` and `max_right_overhang` are independent maxima that can
-  come from different reads, so `ip_anchor` is an upper bound on STAR's value.
-- For paired-end data, STAR counts a fragment once when both mates cross a
-  junction; intron-prospector counts each alignment. Check
-  `shared_read_sums` before reading per-junction count differences as a defect.
-- intron-prospector drops secondary alignments (`junction_qc` in
-  `src/junctions_extractor.cc` of the intronProspector tree), while `SJ.out.tab` counts them in column 8.  A
-  junction crossed only by secondary alignments is therefore STAR-only: 13,939
-  of WTC11's 18,178 STAR-only junctions have `uniq_count` 0.
-- `uniq`/`multi` are not the same partition: intron-prospector also has
-  `unsure_mapped_count` for alignments with no NH tag or a discordant or
-  partially mapped pair.
-- `junctions_from_sam` skips any alignment whose CIGAR holds an insertion,
-  deletion, soft clip or hard clip, printing one message per kind.  On an
-  Illumina STAR BAM that drops a large share of the alignments, and with them
-  junctions supported only by clipped or indel-carrying reads.
-- `junctions_from_sam` does not test the SAM flags, so it counts secondary,
-  supplementary and QC fail alignments that intron-prospector skips.  It
-  therefore reports junctions that intron-prospector does not, the same
-  junctions `SJ.out.tab` has and the calls do not.
-- `junctions_from_sam` caps its score at 1000 supporting alignments, so a count
-  of 1000 is a floor, not a count.
+  come from different reads, so `ip_anchor`, the smaller of the two, is an
+  upper bound on STAR's value rather than the same quantity.
+- `SJ.out.tab` columns 2 and 3 are the first and last intron base, 1-based
+  inclusive; the calls are 0-based half open.  `bin/sj-compare` converts.
+- STAR classifies the intron motif itself.  intron-prospector reports
+  `splice_sites` only with `--genome-fasta`, and `--main-chroms-only` exists
+  because the two assemblies name scaffolds differently.
+- STAR marks junctions that are in the annotation, column 6.  There is no such
+  column on the calls side.
+- `confidence` has no counterpart in `SJ.out.tab`.
+
+## Where junctions_from_sam differs
+
+- It skips any alignment whose CIGAR holds an insertion, deletion, soft clip or
+  hard clip, printing one message per kind.  On an Illumina STAR BAM that drops
+  a large share of the alignments, and with them junctions supported only by
+  clipped reads or reads with an indel.
+- It does not test the SAM flags, so it counts secondary, supplementary and QC
+  fail alignments.  Its read set is closest to the `qcfail` run.
+- It applies its entropy threshold while running, so the flair side of a
+  comparison is never unfiltered.
+- It caps its score at 1000 supporting alignments, so a count of 1000 is a
+  floor, not a count.

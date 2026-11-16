@@ -4,12 +4,13 @@
 # Each dataset is one full pass over a multi-gigabyte BAM, so use `make -j` to
 # overlap them.  Datasets and their inputs are in conf/datasets.tsv.
 #
-#   make calls       run intron-prospector, write output/<ds>.calls.tsv
+#   make calls       run intron-prospector, write output/<ds>.<run>.calls.tsv
 #   make flair       run flair's junctions_from_sam, write output/<ds>.flair.bed
 #   make compare     compare the three junction sets (depends on calls and flair)
 #
-# One comparison per dataset per filter in ${filters}; bin/sj-compare --help
-# lists the filters and what each keeps.
+# One intron-prospector pass per dataset per run in ${runs}, and one comparison
+# of each against SJ.out.tab and the flair BED per filter in ${filters}.
+# bin/sj-compare --help lists the filters and what each keeps.
 
 datasets = $(shell tail -n +2 conf/datasets.tsv | cut -f1)
 outDir = output
@@ -27,6 +28,13 @@ flairJuncs = $(dir ${CONDA_PREFIX})flair-mddev/bin/junctions_from_sam
 # SJ.out.tab of the dataset in $*, looked up at recipe time
 sjOutTab = $$(awk -F'\t' -v name=$* 'NR>1 && $$1==name{print $$3}' conf/datasets.tsv)
 
+# intron-prospector passes to compare.  base is the default run; qcfail also
+# counts the alignments the sequencer's chastity filter flagged, which
+# SJ.out.tab counts, junctions_from_sam counts, and the default run skips.
+runs = base qcfail
+baseRunOpts =
+qcfailRunOpts = --keep-qcfail
+
 # bin/sj-compare filters, each applied to both sides
 filters = raw filt_similar filt_flair
 
@@ -38,29 +46,34 @@ compareOpts = --main-chroms-only
 all: compare
 
 .PHONY: calls
-calls: ${datasets:%=${outDir}/%.calls.tsv}
+calls: $(foreach r,${runs},${datasets:%=${outDir}/%.$r.calls.tsv})
 
 .PHONY: flair
 flair: ${datasets:%=${outDir}/%.flair.bed}
 
 .PHONY: compare
-compare: $(foreach f,${filters},${datasets:%=${outDir}/%.$f.summary.tsv})
+compare: $(foreach r,${runs},$(foreach f,${filters},${datasets:%=${outDir}/%.$r.$f.summary.tsv}))
 
-${outDir}/%.calls.tsv: bin/run-prospector bin/benchconf.py conf/datasets.tsv ${prospector}
-	./bin/run-prospector --prospector=${prospector} $* $@
+# one rule per run, with the dataset as the stem
+define callsRule
+${outDir}/%.$(1).calls.tsv: bin/run-prospector bin/benchconf.py conf/datasets.tsv $${prospector}
+	./bin/run-prospector --prospector=$${prospector} $${$(1)RunOpts} $$* $$@
+endef
+$(foreach r,${runs},$(eval $(call callsRule,$r)))
 
 ${outDir}/%.flair.bed: bin/run-flair-juncs bin/benchconf.py conf/datasets.tsv
 	./bin/run-flair-juncs --junctions-from-sam=${flairJuncs} $* $@
 
-# one pattern rule per filter, with the dataset as the stem
+# one rule per run and filter, with the dataset as the stem.
+# junctions_from_sam reads every alignment, so one flair BED serves both runs.
 define compareRule
-${outDir}/%.$(1).compare.tsv.gz ${outDir}/%.$(1).summary.tsv: ${outDir}/%.calls.tsv ${outDir}/%.flair.bed bin/sj-compare
-	./bin/sj-compare --filter=$(1) $${compareOpts} \
+${outDir}/%.$(1).$(2).compare.tsv.gz ${outDir}/%.$(1).$(2).summary.tsv: ${outDir}/%.$(1).calls.tsv ${outDir}/%.flair.bed bin/sj-compare
+	./bin/sj-compare --filter=$(2) $${compareOpts} \
 	    --flair-bed=$${outDir}/$$*.flair.bed \
-	    $${sjOutTab} $${outDir}/$$*.calls.tsv \
-	    $${outDir}/$$*.$(1).compare.tsv.gz $${outDir}/$$*.$(1).summary.tsv
+	    $${sjOutTab} $${outDir}/$$*.$(1).calls.tsv \
+	    $${outDir}/$$*.$(1).$(2).compare.tsv.gz $${outDir}/$$*.$(1).$(2).summary.tsv
 endef
-$(foreach f,${filters},$(eval $(call compareRule,$f)))
+$(foreach r,${runs},$(foreach f,${filters},$(eval $(call compareRule,$r,$f))))
 
 ${prospector}:
 	cd ${prospectorDir} && ${MAKE}
