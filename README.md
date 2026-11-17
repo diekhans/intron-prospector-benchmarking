@@ -218,7 +218,8 @@ equivalent intron-prospector reports to `SJ.out.tab` column 9.
 All three report introns from the same STAR BAM.  What differs is which
 alignments each one reads and which junctions each one writes, not how well
 each finds an intron.  The sections below give each difference; these are the
-ones that produce most of them.
+ones that produce most of them.  `doc/tool-differences.org` is the same list on
+its own, for a reader who is not running the benchmark.
 
 ### STAR against intron-prospector
 

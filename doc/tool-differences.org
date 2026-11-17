@@ -1,0 +1,55 @@
+#+TITLE: STAR, flair and intron-prospector: what differs
+#+DATE: 2026-11-16
+
+All three report introns from the same STAR BAM.  What differs is which
+alignments each one reads and which junctions each one writes, not how well
+each finds an intron.
+
+* STAR SJ.out.tab against intron-prospector
+
+- STAR writes the tab while aligning.  intron-prospector reads the finished BAM.
+- The tab is already filtered: short overhangs and low counts are dropped, and
+  annotated junctions are kept whatever their support.  The calls are
+  unfiltered unless an option asks for a filter.
+- STAR counts the reads a sequencer chastity filter flagged and the secondary
+  alignments of multi-mapping reads.  intron-prospector skips both by default;
+  --include=qcfail,secondary reads them.
+- STAR counts a read pair once.  intron-prospector counts each alignment.
+- The overhang in the tab and the anchor in the calls are measured differently.
+  Tab coordinates are 1-based and inclusive, the calls are 0-based and half
+  open.
+- Only the tab marks a junction as annotated.
+- WTC11, same read set, no filters: 383,247 junctions against 383,256, of which
+  14 differ, 0.004%.
+- Read counts over the 383,244 shared junctions: the calls are 23.8% higher at
+  the median and 29.0% higher on average, equal on 27.2%, and lower on 112.
+  Counting each alignment rather than each pair is most of it.
+
+* flair junctions_from_sam against intron-prospector
+
+- Both read the finished BAM and take introns from the CIGAR, so they are the
+  closest pair of the three.
+- junctions_from_sam does not test the SAM flags, so it reads QC fail,
+  secondary and supplementary alignments.
+- junctions_from_sam skips any alignment with an insertion, deletion or
+  clipping, which is a large part of an Illumina BAM.  That is why it reports
+  the fewest junctions: 292,346 against 383,256.
+- junctions_from_sam applies its entropy threshold while running, so its output
+  is never unfiltered.  intron-prospector writes everything and filters on
+  request.
+- junctions_from_sam writes a BED whose count stops at 1000 and whose strand
+  comes from the XS tag.  intron-prospector writes a TSV with unique,
+  multi-mapping and unsure counts, both overhangs, the confidence and the
+  splice sites.
+- WTC11, same read set, no filters: the calls contain all 292,346 junctions
+  junctions_from_sam reports, 76.3% of the 383,256 in the calls.
+- Read counts over the 281,159 shared junctions whose count is under the 1000
+  cap: the calls are 14.3% higher at the median and 32.0% higher on average,
+  equal on 27.6%, and never lower.  The skipped insertions, deletions and clips
+  are most of it.
+- One WTC11 pass takes 4 minutes against 2.5 hours.
+
+* Detail
+
+- intron-prospector-benchmarking: README.md, doc/wtc11-star-only.org,
+  doc/wtc11-flair-only.org.
