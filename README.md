@@ -213,6 +213,62 @@ equivalent intron-prospector reports to `SJ.out.tab` column 9.
   the other two sides by the filter, half are supported only by secondary
   alignments, and all of them come from multi-mapping reads.
 
+## How the three tools differ
+
+High level, before the detail below.  All three read one BAM from one STAR run,
+so a junction only one of them reports is a difference in method, not in data.
+
+### STAR against intron-prospector
+
+- Different stages of the same run.  STAR writes `SJ.out.tab` while aligning,
+  from its own record of each read's splices; intron-prospector derives
+  junctions from the `N` operations of the BAM afterwards.  Anything STAR knew
+  and did not write into the BAM, and anything the tab's own filters removed,
+  is a difference.
+- The tab is filtered output and the calls are not.  `--outSJfilter*` applies to
+  the tab only, and annotated junctions bypass it, so the tab both drops
+  junctions whose alignments are in the BAM and keeps junctions no threshold on
+  the calls side will match.
+- Different read sets.  STAR counts the alignments the chastity filter flagged
+  and the secondary alignments of multi-mapping reads; intron-prospector skips
+  qcfail, dup and secondary unless `--include` names them.
+- Different count columns.  Both report a unique and a multi-mapping count,
+  intron-prospector adds `unsure` for an alignment it cannot categorise, and
+  STAR counts a fragment once where both mates cross a junction.
+- Different measurements.  The overhang in column 9 and `ip_anchor` are not the
+  same quantity, the coordinates differ in base and half-openness, and only the
+  STAR side marks annotated junctions.
+- Measured on WTC11: with `--include=qcfail,secondary` and no thresholds the two
+  sets agree within 14 junctions of 383,247.  The remaining causes are the tab's
+  own filters, which `filt_similar` approximates.
+
+### junctions_from_sam against intron-prospector
+
+- The same kind of tool.  Both read the BAM after alignment and take junctions
+  from the `N` operations, so what differs is which alignments each reads and
+  what each reports about them.
+- Different read sets.  `junctions_from_sam` does not test the SAM flags at all,
+  so it counts secondary, supplementary and QC fail alignments;
+  intron-prospector skips three of those by default.
+- Different alignment sets.  `junctions_from_sam` skips any alignment whose
+  CIGAR holds an insertion, deletion, soft clip or hard clip, which on an
+  Illumina BAM is a large share of them.  That, not detection, is why its totals
+  are the smallest of the three: 292,346 WTC11 junctions against 383,256.
+- Different filtering points.  `junctions_from_sam` applies its entropy
+  threshold while running, so its output is never unfiltered; intron-prospector
+  reports everything and filters by option, which lets `bin/sj-compare` apply
+  thresholds afterwards.
+- Different reports.  Its output is a BED6 whose score is the supporting
+  alignment count capped at 1000 and whose strand comes from the `XS` tag; the
+  calls report unique, multi-mapping and unsure counts, both overhangs, the
+  confidence, the splice sites and a strand from `XS` or from the genome.
+- The confidence is the same statistic in both, the Shannon entropy of the
+  distinct alignment offsets, computed over different alignment sets, so the
+  values are not interchangeable.
+- Measured on WTC11: with `--include=qcfail,secondary` and no thresholds the
+  calls hold all 292,346 junctions `junctions_from_sam` reports.  One pass takes
+  4 minutes against its 2.5 hours.
+
 ## Where intron-prospector differs from STAR
 
 None of these is a defect in either tool.  They are the reasons two correct
