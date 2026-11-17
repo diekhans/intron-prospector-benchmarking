@@ -239,7 +239,8 @@ its own, for a reader who is not running the benchmark.
 - Read counts over the 383,244 shared junctions: equal on 99.1%, never higher
   in the calls, lower on 3,554.  Those 3,554 are the anchor difference: STAR
   counts alignments whose anchor holds an insertion, deletion or clip, which
-  intron-prospector rejects.
+  intron-prospector rejects.  A549 is the same: of the 946,897 shared
+  junctions, 944,492 match, 99.75%, and none is higher in the calls.
 
 ### junctions_from_sam against intron-prospector
 
