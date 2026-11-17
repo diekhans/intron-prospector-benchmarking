@@ -28,12 +28,17 @@ flairJuncs = $(dir ${CONDA_PREFIX})flair-mddev/bin/junctions_from_sam
 # SJ.out.tab of the dataset in $*, looked up at recipe time
 sjOutTab = $$(awk -F'\t' -v name=$* 'NR>1 && $$1==name{print $$3}' conf/datasets.tsv)
 
-# intron-prospector passes to compare.  base is the default run; qcfail also
-# counts the alignments the sequencer's chastity filter flagged, which
-# SJ.out.tab counts, junctions_from_sam counts, and the default run skips.
-runs = base qcfail
+# intron-prospector passes to compare, each naming the alignment categories it
+# reads that the default run excludes.  base is the default run; qcfail adds the
+# alignments the sequencer's chastity filter flagged, which SJ.out.tab and
+# junctions_from_sam both count; secondary adds the other loci of a
+# multi-mapping read on top of those, which junctions_from_sam counts and
+# SJ.out.tab counts in its multi-mapping column.  The BAMs have no duplicate
+# flags, so the secondary run reads every alignment junctions_from_sam reads.
+runs = base qcfail secondary
 baseRunOpts =
-qcfailRunOpts = --keep-qcfail
+qcfailRunOpts = --include=qcfail
+secondaryRunOpts = --include=qcfail,secondary
 
 # bin/sj-compare filters, each applied to both sides
 filters = raw filt_similar filt_flair

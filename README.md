@@ -83,11 +83,20 @@ writing `output/<ds>.<run>.calls.tsv`:
 - `base`, the default, which skips the alignments flagged by the sequencer's
   chastity filter, QC fail, along with duplicates and secondary alignments
 - `qcfail`, `--include=qcfail`, which counts the QC fail alignments
+- `secondary`, `--include=qcfail,secondary`, which also counts the other loci of
+  a multi-mapping read
 
-`SJ.out.tab` counts QC fail alignments, and `junctions_from_sam` does not look
-at the flags at all, so `qcfail` is the run whose read set is closest to both.
-It is the control for `doc/wtc11-star-only.org`, where QC fail alignments
-account for the WTC11 junctions STAR reports and intron-prospector does not.
+`SJ.out.tab` counts QC fail alignments in both of its count columns and
+secondary alignments in the multi-mapping one.  `junctions_from_sam` does not
+test the flags at all, so `secondary` is the run whose read set equals its own:
+the BAMs have no duplicate flags, and both tools read supplementary alignments.
+
+- `qcfail` is the control for `doc/wtc11-star-only.org`, where QC fail
+  alignments account for the WTC11 junctions STAR reports and intron-prospector
+  does not.
+- `secondary` is the control for `doc/wtc11-flair-only.org`, where secondary
+  alignments account for the junctions `junctions_from_sam` reports and
+  intron-prospector does not.
 
 ## How junctions_from_sam is run
 
@@ -199,6 +208,10 @@ equivalent intron-prospector reports to `SJ.out.tab` column 9.
 - `doc/wtc11-star-only.org`: why 20 of 20 sampled WTC11 `SJ.out.tab` junctions
   are absent from the calls.  STAR copies the Illumina chastity filter into SAM
   flag 0x200 and counts those alignments; intron-prospector skips them.
+- `doc/wtc11-flair-only.org`: why `junctions_from_sam` has 14,763 WTC11
+  junctions neither other tool has under `filt_similar`.  Half are dropped from
+  the other two sides by the filter, half are supported only by secondary
+  alignments, and all of them come from multi-mapping reads.
 
 ## Where intron-prospector differs from STAR
 
@@ -258,7 +271,7 @@ tools report different junctions from one BAM.
   a large share of the alignments, and with them junctions supported only by
   clipped reads or reads with an indel.
 - It does not test the SAM flags, so it counts secondary, supplementary and QC
-  fail alignments.  Its read set is closest to the `qcfail` run.
+  fail alignments.  Its read set is that of the `secondary` run.
 - It applies its entropy threshold while running, so the flair side of a
   comparison is never unfiltered.
 - It caps its score at 1000 supporting alignments, so a count of 1000 is a

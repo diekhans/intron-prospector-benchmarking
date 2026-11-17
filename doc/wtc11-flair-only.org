@@ -1,0 +1,207 @@
+#+TITLE: Why junctions_from_sam reports WTC11 junctions the intron-prospector calls do not
+#+DATE: 2026-11-16
+
+* Conclusion
+
+Every junction counted as flair-only under filt_similar comes from reads that
+align in more than one place.  Two separate causes, neither a defect in either
+tool:
+
+- 7,968 of 14,763 are reported by all three tools.  filt_similar removes them
+  from the STAR and intron-prospector sides for having no uniquely mapped read
+  or an anchor below 12, and bin/sj-compare cannot apply either threshold to
+  the flair side, so they survive there alone.
+- 6,794 of 14,763 are absent from the calls at any threshold.  They are
+  supported only by secondary alignments, SAM flag 0x100, which
+  intron-prospector excludes by default and junctions_from_sam never tests for.
+  20 of 20 sampled junctions are of this kind.
+- 1 of 14,763 is reported by junctions_from_sam alone, also from two secondary
+  alignments.
+
+The secondary run, --include=qcfail,secondary, confirms it: the calls then hold
+all 292,346 junctions junctions_from_sam reports, and flair-only under raw is 0.
+
+flair's total is the smaller one, 292,346 junctions against 356,191, because
+junctions_from_sam skips every alignment whose CIGAR holds an insertion,
+deletion, soft clip or hard clip.  Flair-only is a statement about which 14,763
+junctions it has, not about how many.
+
+* Population
+
+output/WTC11.qcfail.filt_similar.summary.tsv, main chromosomes only, the qcfail
+run, so the QC fail alignments of doc/wtc11-star-only.org are already counted.
+
+| side              | junctions | only this side |
+|-------------------+-----------+----------------|
+| STAR              |   356,424 |             98 |
+| intron-prospector |   356,191 |             23 |
+| junctions_from_sam |  292,346 |         14,763 |
+
+junctions_from_sam has 14,935 junctions the calls do not, of which 14,763 are
+in neither of the other two sets.
+
+* Method
+
+- Took the 14,763 rows with found = flair from
+  output/WTC11.qcfail.filt_similar.compare.tsv.gz.
+- Looked each up in output/WTC11.qcfail.raw.compare.tsv.gz, the same two sets
+  with no threshold applied to either.
+- For the ones absent from the calls there as well, drew 20 with
+  random.Random(20261116).sample, fetched every alignment covering the last
+  exon base from the BAM, parsed all N operations out of the CIGAR, kept those
+  whose N matches the junction exactly, and classified each by SAM flag.
+- Indexed the BAM into data/WTC11.illumina.bam.bai, since its own directory is
+  not writable.
+
+* Result
+
+Where the 14,763 are in the raw comparison:
+
+| found, no filter      |     n | cause                                     |
+|-----------------------+-------+-------------------------------------------|
+| star+prospector+flair | 7,968 | removed from two sides by filt_similar    |
+| star+flair            | 6,794 | supported only by secondary alignments    |
+| flair                 |     1 | supported only by secondary alignments    |
+
+** The 7,968 that filt_similar removes
+
+Every one fails a threshold on the intron-prospector side, none is unexplained:
+
+| reason                                        |     n |
+|-----------------------------------------------+-------|
+| uniq_mapped_count 0, anchor at least 12       | 7,136 |
+| anchor below 12, uniq_mapped_count at least 1 |    19 |
+| both                                          |   813 |
+
+The STAR side fails the same thresholds, 7,948 with a unique count of 0 and 101
+with an overhang below 12, so the junction is dropped from two sides of three.
+junctions_from_sam reports neither an anchor nor a unique count, so
+bin/sj-compare has nothing to apply its thresholds to and leaves the flair side
+whole.  The junction is then the only member of its side.
+
+** The 6,794 that the calls do not contain
+
+| property           | value                                      |
+|--------------------+--------------------------------------------|
+| STAR unique count  | 0 for all 6,794                            |
+| STAR multi count   | 159,612 alignments in all                  |
+| annotated in STAR  | 6,531 of 6,794                             |
+| motif              | 6,730 GT/AG, 47 GC/AG, 17 non-canonical    |
+| flair count 1 / 2  | 238 / 1,361                                |
+| flair count 3-9    | 2,853                                      |
+| flair count 10-99  | 2,056                                      |
+| flair count 100+   | 286                                        |
+
+A unique count of 0 on the STAR side for all of them is the whole statement:
+these junctions are crossed only by reads that align elsewhere as well.  Most
+are annotated and canonical, so they are real junctions of real genes, reported
+from the wrong locus or from one of several equally good ones.
+
+Sample of 20, the same classification as doc/wtc11-star-only.org:
+
+| verdict                                           |  n |
+|---------------------------------------------------+----|
+| supported only by secondary alignments            | 20 |
+| supported only by QC fail alignments              |  0 |
+| supported by an alignment intron-prospector reads |  0 |
+| no alignment has the N operation                  |  0 |
+
+Supporting alignment counts run from 1 to 43 in the sample, all secondary.
+
+* Root cause
+
+Which SAM flag bits each tool acts on, the same table as doc/wtc11-star-only.org
+read along the 0x100 row:
+
+|   bit | name      | SJ.out.tab          | intron-prospector                | junctions_from_sam |
+|-------+-----------+---------------------+----------------------------------+--------------------|
+| 0x100 | SECONDARY | counted in column 8 | excluded unless --include=secondary | counted         |
+| 0x200 | QCFAIL    | counted             | excluded unless --include=qcfail  | counted            |
+
+- intron-prospector: ALIGN_CATS_EXCLUDED_DEFAULT in src/junctions_extractor.hh
+  holds BAM_FQCFAIL, BAM_FDUP and BAM_FSECONDARY.  A multi-mapping read is
+  counted, in multi_mapped_count, but only through its primary alignment
+  record.  For these junctions the primary alignment is at another locus, so
+  nothing records them.
+- junctions_from_sam: src/flair/junctions_from_sam.py reads the FLAG field into
+  a variable and never tests it.  It skips an unmapped record, and a CIGAR with
+  I, D, S or H, and nothing else.
+- SJ.out.tab: counts these alignments in column 8, multi-mapping reads, which
+  is why column 7 is 0 and the junction is still in the tab.
+
+* Evidence
+
+- Region reproduction.  chr12:14705000-14711000 extracted to its own BAM and
+  run twice with the thresholds bin/run-prospector uses:
+
+  : samtools view -X -b -o region.bam BAM BAI chr12:14705000-14711000
+  : intron-prospector --min-anchor-length=1 --min-confidence-score=0.0 \
+  :     --sj-filter=all --intron-calls=OUT region.bam
+
+  The default run reports nothing at 14705629.  Adding --include=secondary, and
+  nothing else, reports it:
+
+  : chr12  14705629  14710398  .  uniq 0  multi 1667  left 99  right 99  conf 5.07
+
+  That is the minimum controlling change.
+
+- Supporting alignments.  1,753 alignments cross chr12:14705629-14710398, every
+  one secondary, NH 2 to 20.  86 of them also have the QC fail flag, which the
+  region run above did not include, which is why it reports 1,667.  The
+  --debug-trace rows are per alignment, both mates of a pair among them.
+  Two more junctions checked the same way: chr12:7819583-7925843, 2,522
+  alignments, and chr16:14834016-14838406, 1,191 alignments, all secondary.
+
+- The single flair-only junction in the raw comparison,
+  chr12:120321018-120502136, has two alignments, both flag 419, which is 0x100
+  plus proper pair, second in pair and mate reverse, both three-exon CIGARs with
+  a 13M or 14M anchor.
+
+* Consequences
+
+- The remaining read-set difference against junctions_from_sam is secondary
+  alignments.  The qcfail run closed the QC fail one.
+- A junction crossed only by secondary alignments is invisible to
+  intron-prospector by design: its reads have a better alignment somewhere else.
+  Whether to count it is a question about the dataset, not about the tool.
+- The benchmark now has a secondary run, --include=qcfail,secondary, which makes
+  the read sets equal: the BAMs have no duplicate flags, and both tools read
+  supplementary alignments.
+
+* What --include=qcfail,secondary does to the comparison
+
+output/WTC11.<run>.<filter>.summary.tsv, main chromosomes only.
+
+| run       | filter       |    STAR | intron-prospector | in flair, not in the calls | only flair |
+|-----------+--------------+---------+-------------------+----------------------------+------------|
+| qcfail    | raw          | 383,247 |           370,242 |                      6,795 |          1 |
+| secondary | raw          | 383,247 |           383,256 |                          0 |          0 |
+| qcfail    | filt_similar | 356,424 |           356,191 |                     14,935 |     14,763 |
+| secondary | filt_similar | 356,424 |           356,462 |                     14,761 |     14,759 |
+| qcfail    | filt_flair   | 383,247 |           287,116 |                     21,524 |          1 |
+| secondary | filt_flair   | 383,247 |           304,470 |                      5,778 |          1 |
+
+- Under raw the calls become a superset of the flair set: 0 of 292,346 missing,
+  which is the prediction of this investigation run against the whole BAM
+  rather than a sample.
+- The junctions STAR reports and the calls do not also fall from 13,009 to 3
+  under raw, so secondary alignments account for nearly all of what the qcfail
+  run left of doc/wtc11-star-only.org.  intron-prospector then reports 11
+  junctions SJ.out.tab does not.
+- Under filt_similar the flair-only count stays at 14,759.  These are the
+  junctions with no uniquely mapped read; a secondary alignment is counted as
+  multi-mapping, so reading it does not move a junction over that threshold.
+  The number falls by only 4, where a secondary alignment supplies an anchor of
+  12 or more.
+- Under filt_flair 5,778 junctions junctions_from_sam reports still fail the
+  confidence threshold on the calls side, down from 21,524.  Both tools compute
+  the same statistic over different alignment sets: junctions_from_sam skips a
+  CIGAR with an insertion, deletion or clip, and intron-prospector counts both
+  mates of a pair.  That is a different cause from this one.
+
+* Files
+
+- output/WTC11.secondary.<filter>.summary.tsv and the matching compare files,
+  the run that reads the same alignments junctions_from_sam reads.
+- Sample and per junction detail: sample_flair_only.py under the session
+  scratchpad.
