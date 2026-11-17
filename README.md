@@ -217,55 +217,40 @@ equivalent intron-prospector reports to `SJ.out.tab` column 9.
 
 All three report introns from the same STAR BAM.  What differs is which
 alignments each one reads and which junctions each one writes, not how well
-each finds an intron.  The sections below give each difference; these are the
-ones that produce most of them.  `doc/tool-differences.org` is the same list on
-its own, for a reader who is not running the benchmark.
+each finds an intron.  The sections below give every difference; these are the
+ones that produce most of them.  `doc/tool-differences.org` says the same at
+more length, for a reader who is not running the benchmark.
 
 ### STAR against intron-prospector
 
-- STAR writes `SJ.out.tab` while aligning; intron-prospector reads the finished
-  BAM.
-- The tab is already filtered, by overhang and by count, and annotated
-  junctions bypass those filters.  The calls are unfiltered.
-- STAR counts QC fail and secondary alignments; intron-prospector skips both
-  unless `--include` names them.
+- STAR writes `SJ.out.tab` while aligning and filters it by overhang and count,
+  with annotated junctions bypassing the filters; intron-prospector reads the
+  finished BAM and filters nothing.
+- STAR counts QC fail and secondary alignments; the calls skip both unless
+  `--include` names them.
 - Both count a read once per junction, a pair whose mates both cross it
   included.
-- The tab's overhang and the calls' anchor are measured differently, and the
-  coordinates differ in base and half-openness.
-- Only the tab marks a junction as annotated.
-- WTC11, same read set, no filters: 383,247 junctions against 383,256, of which
-  14 differ, 0.004%.
-- Read counts over the 383,244 shared junctions: equal on 99.1%, never higher
-  in the calls, lower on 3,554.  Those 3,554 are the anchor difference: STAR
-  counts alignments whose anchor holds an insertion, deletion or clip, which
-  intron-prospector rejects.  A549 is the same: of the 946,897 shared
-  junctions, 944,492 match, 99.75%, and none is higher in the calls.
+- The tab's overhang, its coordinates and its annotated column have no exact
+  counterpart in the calls.
+- WTC11, same read set, no filters: 383,247 junctions against 383,256, 14
+  differ.  Counts match on 99.1% of the 383,244 shared and are never higher in
+  the calls; A549 matches on 99.75% of 946,897.  The rest is STAR counting
+  alignments whose anchor holds an insertion, deletion or clip.
 
 ### junctions_from_sam against intron-prospector
 
-- Both read the finished BAM and take introns from the CIGAR, so they are the
-  closest pair of the three.
-- `junctions_from_sam` does not test the SAM flags, so it reads QC fail,
-  secondary and supplementary alignments.
-- `junctions_from_sam` skips any alignment with an insertion, deletion or
-  clipping, a large part of an Illumina BAM.  That is why it reports the fewest
-  junctions, 292,346 against 383,256.
-- `junctions_from_sam` applies its entropy threshold while running, so its
-  output is never unfiltered.
-- It writes a BED whose count stops at 1000 and whose strand comes from the
-  `XS` tag; the calls hold unique, multi-mapping and unsure counts, both
-  overhangs, the confidence and the splice sites.
-- WTC11, same read set, no filters: the calls contain all 292,346 junctions it
-  reports, 76.3% of the 383,256 in the calls.  One pass takes 4 minutes against
-  its 2.5 hours.
-- `junctions_from_sam` counts each alignment, so a pair whose mates both cross
-  one junction counts twice; intron-prospector counts the read once.
-- Read counts over the 281,159 shared junctions whose count is under the 1000
-  cap: equal on 19.6%, the calls lower on 57.9%, 5.2% lower at the median and
-  0.6% higher on average.  Two causes pull against each other, the mates
-  counted twice and the alignments skipped for an insertion, deletion or
-  clip.
+- Both read the finished BAM and take introns from the CIGAR.
+- It does not test the SAM flags, so it reads QC fail, secondary and
+  supplementary alignments.
+- It skips any alignment with an insertion, deletion or clipping, which is why
+  it reports the fewest junctions, 292,346 against 383,256.
+- It counts each alignment, so a pair whose mates both cross a junction counts
+  twice; it applies its entropy threshold while running, so its output is never
+  unfiltered; its BED count stops at 1000.
+- WTC11, same read set, no filters: the calls hold all 292,346 junctions it
+  reports.  Over the 281,159 shared junctions under the cap, counts are equal
+  on 19.6% and lower in the calls on 57.9%, 5.2% lower at the median.  One pass
+  takes 4 minutes against its 2.5 hours.
 
 ## Where intron-prospector differs from STAR
 
