@@ -162,8 +162,10 @@ from the cluster image, not from the alignment.
   |    100918127 |  100921705 |     69 |     2 |         5 | yes      |
   |    100961918 |  100965768 |      0 |     0 |         3 | no       |
 
-  Reported exactly when usable is not zero.  The reported counts equal the
-  usable counts in every case: uniq plus multi is 20, 90, 1, 91, 116, 1 and 69.
+  Reported exactly when usable is not zero.  The reported counts are the
+  distinct reads among the usable alignments, uniq plus multi being 20, 75, 1,
+  83, 94, 1 and 59 against usable alignment counts of 20, 90, 1, 91, 116, 1 and
+  69.  A pair whose mates both cross a junction is one read.
 
 - Rate.  34 of the 559 alignments in that region have 0x200 set, 6.1%, against
   5.3% of reads flagged in the FASTQ.

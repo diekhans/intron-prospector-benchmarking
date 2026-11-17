@@ -14,20 +14,18 @@ each finds an intron.
 - STAR counts the reads a sequencer chastity filter flagged and the secondary
   alignments of multi-mapping reads.  intron-prospector skips both by default;
   --include=qcfail,secondary reads them.
-- STAR counts a read pair once.  intron-prospector counts each alignment.
+- Both count a read once per junction, a pair whose mates both cross it
+  included.
 - The overhang in the tab and the anchor in the calls are measured differently.
   Tab coordinates are 1-based and inclusive, the calls are 0-based and half
   open.
 - Only the tab marks a junction as annotated.
 - WTC11, same read set, no filters: 383,247 junctions against 383,256, of which
   14 differ, 0.004%.
-- Read counts over the 383,244 shared junctions: the calls are 23.8% higher at
-  the median and 29.0% higher on average, equal on 27.2%, and lower on 112.
-  Both causes are the same rule, that the calls count alignments where the tab
-  counts reads: a pair whose mates both cross one junction counts twice in the
-  calls and once in the tab, 1.25 over unique reads, and with secondary
-  alignments read, each alignment of a multi-mapping read counts again, 2.14
-  over multi-mapping reads.
+- Read counts over the 383,244 shared junctions: equal on 99.1%, never higher
+  in the calls, lower on 3,554.  Those 3,554 are a different difference: STAR
+  counts alignments whose anchor holds an insertion, deletion or clip, which
+  intron-prospector rejects.
 
 * flair junctions_from_sam against intron-prospector
 
@@ -47,10 +45,12 @@ each finds an intron.
   splice sites.
 - WTC11, same read set, no filters: the calls contain all 292,346 junctions
   junctions_from_sam reports, 76.3% of the 383,256 in the calls.
+- junctions_from_sam counts each alignment, so a pair whose mates both cross
+  one junction counts twice.  intron-prospector counts the read once.
 - Read counts over the 281,159 shared junctions whose count is under the 1000
-  cap: the calls are 14.3% higher at the median and 32.0% higher on average,
-  equal on 27.6%, and never lower.  The skipped insertions, deletions and clips
-  are most of it.
+  cap: equal on 19.6%, the calls lower on 57.9%, 5.2% lower at the median and
+  0.6% higher on average.  The mates counted twice and the alignments skipped
+  for an insertion, deletion or clip pull against each other.
 - One WTC11 pass takes 4 minutes against 2.5 hours.
 
 * Detail

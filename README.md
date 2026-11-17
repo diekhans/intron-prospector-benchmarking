@@ -229,19 +229,17 @@ its own, for a reader who is not running the benchmark.
   junctions bypass those filters.  The calls are unfiltered.
 - STAR counts QC fail and secondary alignments; intron-prospector skips both
   unless `--include` names them.
-- STAR counts a read pair once; intron-prospector counts each alignment.
+- Both count a read once per junction, a pair whose mates both cross it
+  included.
 - The tab's overhang and the calls' anchor are measured differently, and the
   coordinates differ in base and half-openness.
 - Only the tab marks a junction as annotated.
 - WTC11, same read set, no filters: 383,247 junctions against 383,256, of which
   14 differ, 0.004%.
-- Read counts over the 383,244 shared junctions: the calls are 23.8% higher at
-  the median and 29.0% higher on average, equal on 27.2%, and lower on 112.
-  Two causes, both from counting alignments where STAR counts reads: a pair
-  whose mates both cross one junction counts twice in the calls and once in the
-  tab, a ratio of 1.25 over unique reads, and in the secondary run each
-  secondary alignment of a multi-mapping read counts again, a ratio of 2.14
-  over multi-mapping reads.
+- Read counts over the 383,244 shared junctions: equal on 99.1%, never higher
+  in the calls, lower on 3,554.  Those 3,554 are the anchor difference: STAR
+  counts alignments whose anchor holds an insertion, deletion or clip, which
+  intron-prospector rejects.
 
 ### junctions_from_sam against intron-prospector
 
@@ -260,10 +258,13 @@ its own, for a reader who is not running the benchmark.
 - WTC11, same read set, no filters: the calls contain all 292,346 junctions it
   reports, 76.3% of the 383,256 in the calls.  One pass takes 4 minutes against
   its 2.5 hours.
+- `junctions_from_sam` counts each alignment, so a pair whose mates both cross
+  one junction counts twice; intron-prospector counts the read once.
 - Read counts over the 281,159 shared junctions whose count is under the 1000
-  cap: the calls are 14.3% higher at the median and 32.0% higher on average,
-  equal on 27.6%, and never lower.  The skipped insertions, deletions and clips
-  are most of it.
+  cap: equal on 19.6%, the calls lower on 57.9%, 5.2% lower at the median and
+  0.6% higher on average.  Two causes pull against each other, the mates
+  counted twice and the alignments skipped for an insertion, deletion or
+  clip.
 
 ## Where intron-prospector differs from STAR
 
@@ -282,9 +283,11 @@ tools report different junctions from one BAM.
 - `uniq` and `multi` are not the same partition on the two sides:
   intron-prospector also has `unsure_mapped_count`, for an alignment with no NH
   tag, a discordant pair, or a mate that did not map.  STAR has no counterpart.
-- For paired-end data, STAR counts a fragment once when both mates cross a
-  junction; intron-prospector counts each alignment.  Read `shared_read_sums`
-  before taking a per-junction count difference for a defect.
+- Both count a read once per junction, so the counts are comparable.  What is
+  left is the anchor difference: STAR counts an alignment whose anchor holds an
+  insertion, deletion or clip, intron-prospector rejects it, and the calls are
+  then lower.  Read `shared_read_sums` before taking a per-junction count
+  difference for a defect.
 
 ### Which junctions are written
 
@@ -324,6 +327,8 @@ tools report different junctions from one BAM.
   clipped reads or reads with an indel.
 - It does not test the SAM flags, so it counts secondary, supplementary and QC
   fail alignments.  Its read set is that of the `secondary` run.
+- It counts each alignment, so a pair whose mates both cross one junction
+  counts twice, where `SJ.out.tab` and the calls count the read once.
 - It applies its entropy threshold while running, so the flair side of a
   comparison is never unfiltered.
 - It caps its score at 1000 supporting alignments, so a count of 1000 is a

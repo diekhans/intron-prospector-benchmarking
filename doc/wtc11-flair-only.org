@@ -141,14 +141,16 @@ read along the 0x100 row:
   The default run reports nothing at 14705629.  Adding --include=secondary, and
   nothing else, reports it:
 
-  : chr12  14705629  14710398  .  uniq 0  multi 1667  left 99  right 99  conf 5.07
+  : chr12  14705629  14710398  .  uniq 0  multi 1003  left 99  right 99  conf 4.55
 
   That is the minimum controlling change.
 
 - Supporting alignments.  1,753 alignments cross chr12:14705629-14710398, every
-  one secondary, NH 2 to 20.  86 of them also have the QC fail flag, which the
-  region run above did not include, which is why it reports 1,667.  The
-  --debug-trace rows are per alignment, both mates of a pair among them.
+  one secondary, NH 2 to 20, from 1,058 distinct reads: 363 reads with one
+  alignment and 695 with two, their mates.  86 alignments also have the QC fail
+  flag, which the region run above did not include, which is why it reports
+  1,003 reads rather than 1,058.  With --include=qcfail,secondary it reports
+  1,058, the multi-mapping count SJ.out.tab has for this junction.
   Two more junctions checked the same way: chr12:7819583-7925843, 2,522
   alignments, and chr16:14834016-14838406, 1,191 alignments, all secondary.
 
@@ -178,8 +180,8 @@ output/WTC11.<run>.<filter>.summary.tsv, main chromosomes only.
 | secondary | raw          | 383,247 |           383,256 |                          0 |          0 |
 | qcfail    | filt_similar | 356,424 |           356,191 |                     14,935 |     14,763 |
 | secondary | filt_similar | 356,424 |           356,462 |                     14,761 |     14,759 |
-| qcfail    | filt_flair   | 383,247 |           287,116 |                     21,524 |          1 |
-| secondary | filt_flair   | 383,247 |           304,470 |                      5,778 |          1 |
+| qcfail    | filt_flair   | 383,247 |           271,976 |                     36,793 |          1 |
+| secondary | filt_flair   | 383,247 |           292,280 |                     19,709 |          1 |
 
 - Under raw the calls become a superset of the flair set: 0 of 292,346 missing,
   which is the prediction of this investigation run against the whole BAM
@@ -193,11 +195,13 @@ output/WTC11.<run>.<filter>.summary.tsv, main chromosomes only.
   multi-mapping, so reading it does not move a junction over that threshold.
   The number falls by only 4, where a secondary alignment supplies an anchor of
   12 or more.
-- Under filt_flair 5,778 junctions junctions_from_sam reports still fail the
-  confidence threshold on the calls side, down from 21,524.  Both tools compute
+- Under filt_flair 19,709 junctions junctions_from_sam reports still fail the
+  confidence threshold on the calls side, down from 36,793.  Both tools compute
   the same statistic over different alignment sets: junctions_from_sam skips a
-  CIGAR with an insertion, deletion or clip, and intron-prospector counts both
-  mates of a pair.  That is a different cause from this one.
+  CIGAR with an insertion, deletion or clip and counts each alignment, while
+  intron-prospector counts each read, so a pair whose mates both cross a
+  junction gives one offset on the calls side and two on the flair side.  That
+  is a different cause from this one.
 
 * Files
 
