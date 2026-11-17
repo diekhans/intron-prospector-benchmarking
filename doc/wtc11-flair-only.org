@@ -1,5 +1,5 @@
 #+TITLE: Why junctions_from_sam reports WTC11 junctions the intron-prospector calls do not
-#+DATE: 2026-11-16
+#+DATE: 2026-11-17
 
 * Conclusion
 
@@ -161,14 +161,13 @@ read along the 0x100 row:
 
 * Consequences
 
-- The remaining read-set difference against junctions_from_sam is secondary
-  alignments.  The qcfail run closed the QC fail one.
-- A junction crossed only by secondary alignments is invisible to
-  intron-prospector by design: its reads have a better alignment somewhere else.
-  Whether to count it is a question about the dataset, not about the tool.
-- The benchmark now has a secondary run, --include=qcfail,secondary, which makes
-  the read sets equal: the BAMs have no duplicate flags, and both tools read
-  supplementary alignments.
+- Secondary alignments are the one read-set difference against
+  junctions_from_sam that --include=qcfail leaves.
+- A junction crossed only by secondary alignments is absent from the default
+  calls by design: its reads have a better alignment somewhere else.  Whether
+  to count it is a question about the dataset, not about the tool.
+- The secondary run, --include=qcfail,secondary, makes the read sets equal: the
+  BAMs have no duplicate flags, and both tools read supplementary alignments.
 
 * What --include=qcfail,secondary does to the comparison
 
@@ -188,8 +187,8 @@ output/WTC11.<run>.<filter>.summary.tsv, main chromosomes only.
   rather than a sample.
 - The junctions STAR reports and the calls do not also fall from 13,009 to 3
   under raw, so secondary alignments account for nearly all of what the qcfail
-  run left of doc/wtc11-star-only.org.  intron-prospector then reports 11
-  junctions SJ.out.tab does not.
+  run leaves of doc/wtc11-star-only.org.  intron-prospector then reports 11
+  junctions neither other tool has.
 - Under filt_similar the flair-only count stays at 14,759.  These are the
   junctions with no uniquely mapped read; a secondary alignment is counted as
   multi-mapping, so reading it does not move a junction over that threshold.
@@ -202,6 +201,10 @@ output/WTC11.<run>.<filter>.summary.tsv, main chromosomes only.
   intron-prospector counts each read, so a pair whose mates both cross a
   junction gives one offset on the calls side and two on the flair side.  That
   is a different cause from this one.
+- A549 gives the same result, with no QC fail alignments in its BAM: under raw,
+  the junctions junctions_from_sam reports and the calls do not fall from
+  47,513 on the qcfail run to 8 on the secondary run, and flair-only from 2,584
+  to 0.
 
 * Files
 

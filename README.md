@@ -98,6 +98,12 @@ the BAMs have no duplicate flags, and both tools read supplementary alignments.
   alignments account for the junctions `junctions_from_sam` reports and
   intron-prospector does not.
 
+On WTC11 under `raw`, the junctions `SJ.out.tab` holds and the calls do not
+number 17,648 on `base`, 13,009 on `qcfail` and 3 on `secondary`, and the calls then
+hold every junction `junctions_from_sam` reports.  On A549, whose BAM has no QC
+fail alignments, `base` and `qcfail` are identical and `secondary` leaves 8 of
+the 436,224 flair junctions out of the calls.
+
 ## How junctions_from_sam is run
 
 `bin/run-flair-juncs` runs it with `-c 1.0`, the default of both
@@ -251,6 +257,11 @@ more length, for a reader who is not running the benchmark.
   reports.  Over the 281,159 shared junctions under the cap, counts are equal
   on 19.6% and lower in the calls on 57.9%, 5.2% lower at the median.  One pass
   takes 4 minutes against its 2.5 hours.
+- A549, same read set, no filters: the calls hold all but 8 of its 436,224.
+  Over the 422,591 shared junctions under the cap, counts are equal on 34.6%
+  and higher in the calls on 48.8%.  Which side is higher depends on the
+  dataset: the alignments it skips for an insertion, deletion or clip pull
+  against the mates it counts twice.
 
 ## Where intron-prospector differs from STAR
 

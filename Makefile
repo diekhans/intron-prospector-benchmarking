@@ -70,7 +70,7 @@ ${outDir}/%.flair.bed: bin/run-flair-juncs bin/benchconf.py conf/datasets.tsv
 	./bin/run-flair-juncs --junctions-from-sam=${flairJuncs} $* $@
 
 # one rule per run and filter, with the dataset as the stem.
-# junctions_from_sam reads every alignment, so one flair BED serves both runs.
+# junctions_from_sam reads every alignment, so one flair BED serves every run.
 define compareRule
 ${outDir}/%.$(1).$(2).compare.tsv.gz ${outDir}/%.$(1).$(2).summary.tsv: ${outDir}/%.$(1).calls.tsv ${outDir}/%.flair.bed bin/sj-compare
 	./bin/sj-compare --filter=$(2) $${compareOpts} \

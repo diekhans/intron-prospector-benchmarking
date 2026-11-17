@@ -1,5 +1,5 @@
 #+TITLE: STAR, flair and intron-prospector: what differs
-#+DATE: 2026-11-16
+#+DATE: 2026-11-17
 
 All three report introns from the same STAR BAM.  What differs is which
 alignments each one reads and which junctions each one writes, not how well
@@ -52,6 +52,9 @@ each finds an intron.
   cap: equal on 19.6%, the calls lower on 57.9%, 5.2% lower at the median and
   0.6% higher on average.  The mates counted twice and the alignments skipped
   for an insertion, deletion or clip pull against each other.
+- A549 pulls the other way: over its 422,591 shared junctions under the cap,
+  equal on 34.6% and the calls higher on 48.8%, 10.7% higher on average.  Which
+  side is higher is a property of the dataset, not of either tool.
 - One WTC11 pass takes 4 minutes against 2.5 hours.
 
 * Detail

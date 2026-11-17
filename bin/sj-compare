@@ -560,8 +560,9 @@ def count_compare(prospector_count, flair_count):
 
 
 def summarize_pros_flair(metrics, juncs):
-    """read counts over the junctions intron-prospector and flair share; the two
-    count different sets of alignments and junctions_from_sam caps its count at 1000"""
+    """read counts over the junctions intron-prospector and flair share;
+    intron-prospector counts each read and junctions_from_sam each alignment,
+    over different alignment sets, and junctions_from_sam caps its count at 1000"""
     tally = Counter()
     for key in juncs.both(PROSPECTOR, FLAIR):
         tally[count_compare(juncs.prospector[key].total_count,
