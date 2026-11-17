@@ -233,7 +233,10 @@ ones that produce most of them.
   coordinates differ in base and half-openness.
 - Only the tab marks a junction as annotated.
 - WTC11, same read set, no filters: 383,247 junctions against 383,256, of which
-  14 differ.
+  14 differ, 0.004%.
+- Read counts over the 383,244 shared junctions: the calls are 23.8% higher at
+  the median and 29.0% higher on average, equal on 27.2%, and lower on 112.
+  Counting each alignment rather than each pair is most of it.
 
 ### junctions_from_sam against intron-prospector
 
@@ -250,7 +253,12 @@ ones that produce most of them.
   `XS` tag; the calls hold unique, multi-mapping and unsure counts, both
   overhangs, the confidence and the splice sites.
 - WTC11, same read set, no filters: the calls contain all 292,346 junctions it
-  reports.  One pass takes 4 minutes against its 2.5 hours.
+  reports, 76.3% of the 383,256 in the calls.  One pass takes 4 minutes against
+  its 2.5 hours.
+- Read counts over the 281,159 shared junctions whose count is under the 1000
+  cap: the calls are 14.3% higher at the median and 32.0% higher on average,
+  equal on 27.6%, and never lower.  The skipped insertions, deletions and clips
+  are most of it.
 
 ## Where intron-prospector differs from STAR
 
