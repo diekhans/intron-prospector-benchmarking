@@ -23,7 +23,11 @@ each finds an intron.
   14 differ, 0.004%.
 - Read counts over the 383,244 shared junctions: the calls are 23.8% higher at
   the median and 29.0% higher on average, equal on 27.2%, and lower on 112.
-  Counting each alignment rather than each pair is most of it.
+  Both causes are the same rule, that the calls count alignments where the tab
+  counts reads: a pair whose mates both cross one junction counts twice in the
+  calls and once in the tab, 1.25 over unique reads, and with secondary
+  alignments read, each alignment of a multi-mapping read counts again, 2.14
+  over multi-mapping reads.
 
 * flair junctions_from_sam against intron-prospector
 

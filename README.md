@@ -237,7 +237,11 @@ its own, for a reader who is not running the benchmark.
   14 differ, 0.004%.
 - Read counts over the 383,244 shared junctions: the calls are 23.8% higher at
   the median and 29.0% higher on average, equal on 27.2%, and lower on 112.
-  Counting each alignment rather than each pair is most of it.
+  Two causes, both from counting alignments where STAR counts reads: a pair
+  whose mates both cross one junction counts twice in the calls and once in the
+  tab, a ratio of 1.25 over unique reads, and in the secondary run each
+  secondary alignment of a multi-mapping read counts again, a ratio of 2.14
+  over multi-mapping reads.
 
 ### junctions_from_sam against intron-prospector
 
